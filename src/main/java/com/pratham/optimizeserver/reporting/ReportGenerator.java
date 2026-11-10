@@ -329,3 +329,4 @@ public final class ReportGenerator {
         return Collections.unmodifiableList(new ArrayList<DiagnosticReport>(recentReports));
     }
 }
+

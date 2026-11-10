@@ -15,3 +15,4 @@ Thank you for your interest in contributing to **OptimizeServer** (authored by *
    - Platform-specific APIs (Paper, Folia, Spark, Chunky) must degrade gracefully when absent.
 4. **Verification**:
    - Run `mvn clean test package` and verify all unit and integration tests pass before submitting changes.
+

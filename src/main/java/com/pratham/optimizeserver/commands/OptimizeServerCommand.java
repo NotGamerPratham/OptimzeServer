@@ -636,3 +636,4 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
         return matches;
     }
 }
+

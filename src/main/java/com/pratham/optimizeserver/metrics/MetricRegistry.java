@@ -113,3 +113,4 @@ public final class MetricRegistry {
         return history;
     }
 }
+

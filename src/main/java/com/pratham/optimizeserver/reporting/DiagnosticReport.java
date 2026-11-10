@@ -38,3 +38,4 @@ public final class DiagnosticReport {
         return lines;
     }
 }
+

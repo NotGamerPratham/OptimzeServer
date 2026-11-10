@@ -82,3 +82,4 @@ public final class OptimizationValidator {
         return new ModuleValidationReport(reasons.isEmpty(), reasons);
     }
 }
+

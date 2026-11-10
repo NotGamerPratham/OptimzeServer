@@ -155,3 +155,4 @@ public final class ConfigManager {
         return lastValidationMessages;
     }
 }
+

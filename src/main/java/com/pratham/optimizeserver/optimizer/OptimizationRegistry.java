@@ -46,3 +46,4 @@ public final class OptimizationRegistry {
         return Collections.unmodifiableList(new ArrayList<String>(modules.keySet()));
     }
 }
+

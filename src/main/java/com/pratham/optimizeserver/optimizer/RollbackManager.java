@@ -91,3 +91,4 @@ public final class RollbackManager {
         return Collections.unmodifiableList(new ArrayList<RollbackRecord>(history));
     }
 }
+

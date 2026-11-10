@@ -90,3 +90,4 @@ public final class OptimizeServer extends JavaPlugin {
         return configManager;
     }
 }
+

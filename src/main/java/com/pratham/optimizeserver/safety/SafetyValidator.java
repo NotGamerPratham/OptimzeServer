@@ -82,3 +82,4 @@ public final class SafetyValidator {
         return new ValidationResult(violations.isEmpty(), violations);
     }
 }
+

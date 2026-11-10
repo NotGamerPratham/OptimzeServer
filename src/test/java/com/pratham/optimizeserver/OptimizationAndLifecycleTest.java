@@ -254,3 +254,4 @@ public class OptimizationAndLifecycleTest {
         assertEquals(21_000L - 1L, cm.getCacheHits());
     }
 }
+

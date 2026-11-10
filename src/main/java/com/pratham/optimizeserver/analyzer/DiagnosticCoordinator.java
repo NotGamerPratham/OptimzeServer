@@ -183,3 +183,4 @@ public final class DiagnosticCoordinator {
         return Collections.unmodifiableList(new ArrayList<DiagnosticFinding>(findingsHistory));
     }
 }
+

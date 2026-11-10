@@ -80,3 +80,4 @@ public final class EvidenceCollector {
         return new EvidenceBundle(latest, recent, pending, workers, compatibilityReport);
     }
 }
+

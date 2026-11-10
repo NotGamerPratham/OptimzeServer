@@ -32,3 +32,4 @@ All notable changes to **OptimizeServer** will be documented in this file.
   - Optional Chunky integration (`ChunkyIntegration`) with resource readiness checks and manual pre-generation controls.
 - **Administrative Command Suite & Local Reporting**:
   - Full `/optimizeserver` (`/os`) command tree, tab completion, pagination, permission nodes, and local rotating diagnostic reports.
+

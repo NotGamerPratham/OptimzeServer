@@ -33,3 +33,4 @@ public final class CommandPermissions {
         return node != null && sender.hasPermission(node);
     }
 }
+

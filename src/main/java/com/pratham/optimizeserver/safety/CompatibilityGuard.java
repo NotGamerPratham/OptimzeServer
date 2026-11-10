@@ -49,3 +49,4 @@ public final class CompatibilityGuard {
         return compatibilityReport;
     }
 }
+

@@ -403,3 +403,4 @@ public final class PerformanceEngine implements EngineLifecycle {
     public ChunkyIntegration getChunkyIntegration() { return chunkyIntegration; }
     public ReportGenerator getReportGenerator() { return reportGenerator; }
 }
+

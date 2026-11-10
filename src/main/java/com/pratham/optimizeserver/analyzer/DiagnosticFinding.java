@@ -96,3 +96,4 @@ public final class DiagnosticFinding {
         return subsystem.name() + ":" + severity.name();
     }
 }
+

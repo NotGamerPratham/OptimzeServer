@@ -112,3 +112,4 @@ public final class TrendAnalyzer {
         return num / den;
     }
 }
+

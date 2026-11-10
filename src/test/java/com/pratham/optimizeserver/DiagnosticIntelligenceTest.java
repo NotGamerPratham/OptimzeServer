@@ -203,3 +203,4 @@ public class DiagnosticIntelligenceTest {
         assertFalse(recEngine.generateRecommendations(eval1.getEvidenceBundle(), eval1.getFindings()).isEmpty());
     }
 }
+

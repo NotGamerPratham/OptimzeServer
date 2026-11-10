@@ -40,3 +40,4 @@ public final class SafeModeController {
         return Collections.unmodifiableList(new ArrayList<String>(activationReasons));
     }
 }
+

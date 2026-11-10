@@ -374,3 +374,4 @@ public final class BottleneckAnalyzer {
         return String.format(Locale.ROOT, "%.2f", val);
     }
 }
+

@@ -24,3 +24,4 @@ public enum Severity {
         return other != null && this.rank >= other.rank;
     }
 }
+

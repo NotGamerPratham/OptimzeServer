@@ -90,3 +90,4 @@ public interface OptimizationModule {
      */
     String getLastError();
 }
+
