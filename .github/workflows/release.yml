@@ -74,7 +74,7 @@ jobs:
           {
             echo ""
             echo "---"
-            echo "**Downloads:** [Modrinth](https://modrinth.com/plugin/optimizeserver) · [SpigotMC](https://www.spigotmc.org/search/?q=OptimizeServer&t=resource_update) · [GitHub Releases](https://github.com/${{ github.repository }}/releases)"
+            echo "**Downloads:** [Modrinth](https://modrinth.com/plugin/optimizeserver-notgamerpratham) · [SpigotMC](https://www.spigotmc.org/search/?q=OptimizeServer&t=resource_update) · [GitHub Releases](https://github.com/${{ github.repository }}/releases)"
             echo ""
             echo "**Compatibility:** Spigot, Paper, Purpur, Pufferfish, Folia, Leaves, Gale · Minecraft 1.8.8 – 1.21.x+ · Java 8+"
             echo ""

@@ -4,7 +4,7 @@
   <img src="docs/images/banner.png" alt="OptimizeServer — Minecraft Server Performance Engineering" width="100%">
 </p>
 
-[![Modrinth](https://img.shields.io/badge/Modrinth-Download-00AF5C?logo=modrinth&logoColor=white)](https://modrinth.com/plugin/optimizeserver)
+[![Modrinth](https://img.shields.io/badge/Modrinth-Download-00AF5C?logo=modrinth&logoColor=white)](https://modrinth.com/plugin/optimizeserver-notgamerpratham)
 [![SpigotMC](https://img.shields.io/badge/SpigotMC-Download-ED8106?logo=spigotmc&logoColor=white)](https://www.spigotmc.org/search/?q=OptimizeServer&t=resource_update)
 [![GitHub Release](https://img.shields.io/github/v/release/NotGamerPratham/OptimzeServer?logo=github&label=GitHub%20Release)](https://github.com/NotGamerPratham/OptimzeServer/releases/latest)
 [![Java CI](https://github.com/NotGamerPratham/OptimzeServer/actions/workflows/maven.yml/badge.svg)](https://github.com/NotGamerPratham/OptimzeServer/actions/workflows/maven.yml)
@@ -23,6 +23,7 @@
 ## 1. Core Philosophy & Gameplay Preservation Guarantee
 
 OptimizeServer strictly preserves all 16 vanilla gameplay invariants:
+
 - Vanilla gameplay mechanics & game rules
 - Entity behaviour, mob AI, and entity spawning
 - Player movement, combat calculations, inventory mechanics, and player interactions
@@ -36,7 +37,7 @@ OptimizeServer **never** skips server ticks, falsifies TPS readings, removes ent
 ## 2. Compatibility Matrix
 
 | Server Platform | Supported | Execution Model | Notes |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **Paper** | Yes | Main Thread + Async Workers | Uses native TPS/MSPT APIs + monotonic rolling windows |
 | **Purpur** | Yes | Main Thread + Async Workers | Full Paper API + Purpur detection |
 | **Pufferfish / Airplane** | Yes | Main Thread + Async Workers | Full Paper-derivative capability support |
@@ -46,6 +47,7 @@ OptimizeServer **never** skips server ticks, falsifies TPS readings, removes ent
 | **Unknown Bukkit Forks** | Safe Mode | Conservative Safe Mode | Automatically activates `SafeModeController` |
 
 ### Minecraft & Java Runtime Compatibility
+
 - **Universal JAR (`universal-java8` default build profile):** Compiled targeting Java 8 bytecode (`class version 52.0`) with `api-version: '1.13'` and `folia-supported: true`. Runs on **Java 8, 11, 16, 17, 21, and 25+** across Minecraft **1.8.8 through 1.21.x+**.
 - **Optional Modern Profiles:** `modern-java17` (MC 1.18–1.20.4) and `modern-java21` (MC 1.20.5–1.21.x+) are included in `pom.xml`.
 
@@ -54,8 +56,8 @@ OptimizeServer **never** skips server ticks, falsifies TPS readings, removes ent
 ## 3. Download
 
 | Platform | Link | Notes |
-|---|---|---|
-| **Modrinth** | [modrinth.com/plugin/optimizeserver](https://modrinth.com/plugin/optimizeserver-notgamerpratham) | Recommended. Versions are published automatically on every release. |
+| --- | --- | --- |
+| **Modrinth** | [modrinth.com/plugin/optimizeserver](https://modrinth.com/plugin/optimizeserver-notgamerpratham-notgamerpratham) | Recommended. Versions are published automatically on every release. |
 | **SpigotMC** | [spigotmc.org — OptimizeServer](https://www.spigotmc.org/resources/optimizeserver.140480/) | Same JAR, posted to the SpigotMC resource page. |
 | **GitHub Releases** | [Latest release](https://github.com/NotGamerPratham/OptimzeServer/releases/latest) | Includes `OptimizeServer.jar` plus `.sha256` / `.sha512` checksums. |
 
@@ -74,7 +76,7 @@ All three platforms ship the identical universal `OptimizeServer.jar` (Java 8+ b
 ## 5. Command Reference & Permissions
 
 | Command | Permission | Description |
-|---|---|---|
+| --- | --- | --- |
 | `/os help [page]` | `optimizeserver.status` | Paginated command reference |
 | `/os version` | `optimizeserver.status` | Platform, Minecraft version, JVM, and integration details |
 | `/os status` | `optimizeserver.status` | Unified server performance summary |
@@ -99,10 +101,12 @@ All permissions are granted under `optimizeserver.admin` and default to `op`.
 ## 6. Build & Test Instructions
 
 ### Prerequisites
+
 - JDK 17 or JDK 21+ (supports `--release 8` cross-compilation)
 - Apache Maven 3.8+
 
 ### Build Commands
+
 ```bash
 # Default universal build (Java 8+ bytecode, MC 1.8.8 - 1.21.x+)
 mvn clean test package
@@ -113,6 +117,7 @@ mvn clean test package -Pmodern-java17
 # Modern Java 21 build profile
 mvn clean test package -Pmodern-java21
 ```
+
 # OptimizeServer.jar is produced at target/OptimizeServer.jar
 
 ### Publishing & Consuming via GitHub Packages (Apache Maven Registry)
@@ -121,10 +126,13 @@ mvn clean test package -Pmodern-java21
 
 - **Automated Publishing (GitHub Actions):** Pushing to `main` or creating a release runs [`.github/workflows/maven-publish.yml`](.github/workflows/maven-publish.yml), which executes all JUnit tests, uploads `OptimizeServer.jar`, and publishes `com.pratham:optimizeserver:1.0.0` to GitHub Packages using `GITHUB_TOKEN`.
 - **Local Publishing (`mvn deploy`):** Configure `~/.m2/settings.xml` with server `<id>github</id>`, your GitHub username, and a classic Personal Access Token (`write:packages`, `read:packages`), then run:
+
   ```bash
   mvn deploy
   ```
+
 - **Using as a Maven Dependency:**
+
   ```xml
   <dependency>
       <groupId>com.pratham</groupId>
@@ -138,10 +146,12 @@ mvn clean test package -Pmodern-java21
 
 1. Bump `<version>` in `pom.xml` and add a matching `## [x.y.z]` entry to `CHANGELOG.md`.
 2. Tag and push:
+
    ```bash
    git tag v1.0.1
    git push origin v1.0.1
    ```
+
 3. [`.github/workflows/release.yml`](.github/workflows/release.yml) then builds and tests the JAR and:
    - **GitHub Releases:** creates the release with `OptimizeServer.jar`, checksums, and the CHANGELOG notes.
    - **Modrinth:** uploads a new version (loaders: Bukkit, Spigot, Paper, Purpur, Folia; every Minecraft release from 1.8.8 onward). This step needs the repository secret `MODRINTH_TOKEN` (a Modrinth PAT with the *Create versions* scope) and the repository variable `MODRINTH_PROJECT_ID`. If either one is missing, the step is skipped.
