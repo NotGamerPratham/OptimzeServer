@@ -268,11 +268,13 @@ public final class SparkIntegration {
             Object tpsStat = sparkClass.getMethod("tps").invoke(spark);
             if (tpsStat != null) {
                 Class<?> windowEnum = Class.forName("me.lucko.spark.api.statistic.StatisticWindow$TicksPerSecond", false, loader);
-                Object sec10 = Enum.valueOf(windowEnum.asSubclass(Enum.class), "SECONDS_10");
-                Method pollMethod = tpsStat.getClass().getMethod("poll", windowEnum);
-                Object val = pollMethod.invoke(tpsStat, sec10);
-                if (val instanceof Number) {
-                    out.put("TPS (10s)", String.format(Locale.ROOT, "%.2f", ((Number) val).doubleValue()));
+                Object sec10 = findEnumConstant(windowEnum, "SECONDS_10");
+                if (sec10 != null) {
+                    Method pollMethod = tpsStat.getClass().getMethod("poll", windowEnum);
+                    Object val = pollMethod.invoke(tpsStat, sec10);
+                    if (val instanceof Number) {
+                        out.put("TPS (10s)", String.format(Locale.ROOT, "%.2f", ((Number) val).doubleValue()));
+                    }
                 }
             }
         } catch (Throwable ignored) {
@@ -310,6 +312,21 @@ public final class SparkIntegration {
         } catch (Throwable ignored) {
         }
         return out;
+    }
+
+    private static Object findEnumConstant(Class<?> enumClass, String name) {
+        if (enumClass == null || name == null) {
+            return null;
+        }
+        Object[] constants = enumClass.getEnumConstants();
+        if (constants != null) {
+            for (Object c : constants) {
+                if (c instanceof Enum<?> && name.equals(((Enum<?>) c).name())) {
+                    return c;
+                }
+            }
+        }
+        return null;
     }
 }
 

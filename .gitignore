@@ -1,0 +1,92 @@
+# ==============================================================================
+# OptimizeServer - Git Ignore Rules
+# ==============================================================================
+
+# Maven Build Output
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# Java & JVM Artifacts
+*.class
+*.log
+*.ctxt
+.mtj.tmp/
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+hs_err_pid*
+replay_pid*
+*.hprof
+
+# IntelliJ IDEA
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+
+# Eclipse / NetBeans / VS Code
+.apt_generated/
+.classpath
+.factorypath
+.project
+.settings/
+.springBeans
+.sts4-cache/
+nbproject/
+/build/
+/dist/
+.vscode/
+
+# Local Minecraft Server Test & Runtime Data
+run/
+server/
+world/
+world_nether/
+world_the_end/
+logs/
+crash-reports/
+cache/
+libraries/
+versions/
+plugins/
+reports/
+eula.txt
+server.properties
+bukkit.yml
+spigot.yml
+paper.yml
+config/
+purpur.yml
+pufferfish.yml
+folia.yml
+ops.json
+whitelist.json
+banned-players.json
+banned-ips.json
+usercache.json
+permissions.yml
+help.yml
+commands.yml
+
+# Operating System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+

@@ -97,6 +97,13 @@ public final class TickMonitor {
      */
     public void refreshAggregates(long nowNanos) {
         RollingWindow.WindowStats stats5s = metricRegistry.getMspt5s().computeStats(nowNanos);
+        if (stats5s.getSampleCount() == 0 && (hasPaperTickTimes || hasPaperMspt)) {
+            double seededMspt = readNativeTickDurationMs(-1.0);
+            if (seededMspt > 0.0) {
+                metricRegistry.recordTickDurationMs(seededMspt, nowNanos);
+                stats5s = metricRegistry.getMspt5s().computeStats(nowNanos);
+            }
+        }
         RollingWindow.WindowStats stats30s = metricRegistry.getMspt30s().computeStats(nowNanos);
         RollingWindow.WindowStats stats1m = metricRegistry.getMspt1m().computeStats(nowNanos);
         RollingWindow.WindowStats stats5m = metricRegistry.getMspt5m().computeStats(nowNanos);
