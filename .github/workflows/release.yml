@@ -149,3 +149,4 @@ jobs:
             echo "2. On your SpigotMC resource page choose **Post Update**, upload the JAR, and paste the release notes."
             echo "   (Alternatively, set the resource to an *external download* pointing to the GitHub Releases page.)"
           } >> "$GITHUB_STEP_SUMMARY"
+

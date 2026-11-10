@@ -1,5 +1,9 @@
 # OptimizeServer
 
+<p align="center">
+  <img src="docs/images/banner.png" alt="OptimizeServer — Minecraft Server Performance Engineering" width="100%">
+</p>
+
 [![Modrinth](https://img.shields.io/badge/Modrinth-Download-00AF5C?logo=modrinth&logoColor=white)](https://modrinth.com/plugin/optimizeserver)
 [![SpigotMC](https://img.shields.io/badge/SpigotMC-Download-ED8106?logo=spigotmc&logoColor=white)](https://www.spigotmc.org/search/?q=OptimizeServer&t=resource_update)
 [![GitHub Release](https://img.shields.io/github/v/release/NotGamerPratham/OptimzeServer?logo=github&label=GitHub%20Release)](https://github.com/NotGamerPratham/OptimzeServer/releases/latest)
