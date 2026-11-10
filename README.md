@@ -57,7 +57,7 @@ OptimizeServer **never** skips server ticks, falsifies TPS readings, removes ent
 
 | Platform | Link | Notes |
 | --- | --- | --- |
-| **Modrinth** | [modrinth.com/plugin/optimizeserver](https://modrinth.com/plugin/optimizeserver-notgamerpratham-notgamerpratham) | Recommended. Versions are published automatically on every release. |
+| **Modrinth** | [modrinth.com/plugin/optimizeserver-notgamerpratham](https://modrinth.com/plugin/optimizeserver-notgamerpratham) | Recommended. Versions are published automatically on every release. |
 | **SpigotMC** | [spigotmc.org — OptimizeServer](https://www.spigotmc.org/resources/optimizeserver.140480/) | Same JAR, posted to the SpigotMC resource page. |
 | **GitHub Releases** | [Latest release](https://github.com/NotGamerPratham/OptimzeServer/releases/latest) | Includes `OptimizeServer.jar` plus `.sha256` / `.sha512` checksums. |
 
