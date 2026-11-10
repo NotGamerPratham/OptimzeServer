@@ -27,8 +27,8 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
           server-id: github
-          server-username: ${{ github.actor }}
-          server-password: ${{ secrets.GITHUB_TOKEN }}
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_PASSWORD
           cache: 'maven'
 
       - name: Compile, Run Automated Tests, and Package OptimizeServer.jar
@@ -44,5 +44,7 @@ jobs:
         if: github.event_name != 'pull_request'
         run: mvn -B deploy -DskipTests
         env:
+          MAVEN_USERNAME: ${{ github.actor }}
+          MAVEN_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
