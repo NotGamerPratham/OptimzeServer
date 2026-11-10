@@ -55,8 +55,8 @@ OptimizeServer **never** skips server ticks, falsifies TPS readings, removes ent
 
 | Platform | Link | Notes |
 |---|---|---|
-| **Modrinth** | [modrinth.com/plugin/optimizeserver](https://modrinth.com/plugin/optimizeserver) | Recommended. Versions are published automatically on every release. |
-| **SpigotMC** | [spigotmc.org — OptimizeServer](https://www.spigotmc.org/search/?q=OptimizeServer&t=resource_update) | Same JAR, posted to the SpigotMC resource page. |
+| **Modrinth** | [modrinth.com/plugin/optimizeserver](https://modrinth.com/plugin/optimizeserver-notgamerpratham) | Recommended. Versions are published automatically on every release. |
+| **SpigotMC** | [spigotmc.org — OptimizeServer](https://www.spigotmc.org/resources/optimizeserver.140480/) | Same JAR, posted to the SpigotMC resource page. |
 | **GitHub Releases** | [Latest release](https://github.com/NotGamerPratham/OptimzeServer/releases/latest) | Includes `OptimizeServer.jar` plus `.sha256` / `.sha512` checksums. |
 
 All three platforms ship the identical universal `OptimizeServer.jar` (Java 8+ bytecode, Minecraft 1.8.8 – 1.21.x+, Spigot / Paper / Purpur / Folia and forks).
@@ -164,4 +164,3 @@ mvn clean test package -Pmodern-java21
 2. **Per-Plugin CPU Attribution:** Exact per-plugin CPU time requires stack sampling via Spark (`/os profile start`). Without an active profiler, `TaskMonitor` reports scheduled task and worker volumes per plugin without falsely claiming exact CPU share.
 3. **Folia World Enumeration:** Because Folia enforces strict regionalized thread ownership, `ChunkMonitor` and `EntityMonitor` automatically switch to event-driven counters on Folia rather than iterating `World#getLoadedChunks()` or `World#getEntities()` from the global thread.
 4. **Extended 24–72 Hour Soak Testing:** Automated unit, lifecycle, memory-bounds, and micro-benchmark tests execute during the build; full 24–72 hour live production soak testing must be performed on the target host environment prior to large-scale deployment.
-
