@@ -1,5 +1,11 @@
 # OptimizeServer
 
+[![Modrinth](https://img.shields.io/badge/Modrinth-Download-00AF5C?logo=modrinth&logoColor=white)](https://modrinth.com/plugin/optimizeserver)
+[![SpigotMC](https://img.shields.io/badge/SpigotMC-Download-ED8106?logo=spigotmc&logoColor=white)](https://www.spigotmc.org/search/?q=OptimizeServer&t=resource_update)
+[![GitHub Release](https://img.shields.io/github/v/release/NotGamerPratham/OptimzeServer?logo=github&label=GitHub%20Release)](https://github.com/NotGamerPratham/OptimzeServer/releases/latest)
+[![Java CI](https://github.com/NotGamerPratham/OptimzeServer/actions/workflows/maven.yml/badge.svg)](https://github.com/NotGamerPratham/OptimzeServer/actions/workflows/maven.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 **Author:** NotGamerPratham  
 **Main Package:** `com.pratham.optimizeserver`  
 **Main Class:** `com.pratham.optimizeserver.OptimizeServer`  
@@ -41,15 +47,27 @@ OptimizeServer **never** skips server ticks, falsifies TPS readings, removes ent
 
 ---
 
-## 3. Installation Instructions
+## 3. Download
 
-1. Copy `target/OptimizeServer.jar` into your server's `plugins/` directory.
+| Platform | Link | Notes |
+|---|---|---|
+| **Modrinth** | [modrinth.com/plugin/optimizeserver](https://modrinth.com/plugin/optimizeserver) | Recommended. Versions are published automatically on every release. |
+| **SpigotMC** | [spigotmc.org — OptimizeServer](https://www.spigotmc.org/search/?q=OptimizeServer&t=resource_update) | Same JAR, posted to the SpigotMC resource page. |
+| **GitHub Releases** | [Latest release](https://github.com/NotGamerPratham/OptimzeServer/releases/latest) | Includes `OptimizeServer.jar` plus `.sha256` / `.sha512` checksums. |
+
+All three platforms ship the identical universal `OptimizeServer.jar` (Java 8+ bytecode, Minecraft 1.8.8 – 1.21.x+, Spigot / Paper / Purpur / Folia and forks).
+
+---
+
+## 4. Installation Instructions
+
+1. Download `OptimizeServer.jar` from one of the platforms above (or build it yourself) and copy it into your server's `plugins/` directory.
 2. **Automatic Spark & Chunky Installation:** On server startup, [`DependencyAutoInstaller`](src/main/java/com/pratham/optimizeserver/integrations/DependencyAutoInstaller.java) automatically checks whether **Spark** and **Chunky** are already installed or bundled (e.g., Paper 1.21+ bundled Spark). If either is missing, OptimizeServer asynchronously downloads the official plugin JAR from Modrinth/Spiget, verifies its cryptographic SHA-512 and JAR archive integrity, installs it into `plugins/`, and loads it on the main server thread.
 3. Configuration is generated at `plugins/OptimizeServer/config.yml` and local diagnostic reports are saved under `plugins/OptimizeServer/reports/`.
 
 ---
 
-## 4. Command Reference & Permissions
+## 5. Command Reference & Permissions
 
 | Command | Permission | Description |
 |---|---|---|
@@ -74,7 +92,7 @@ All permissions are granted under `optimizeserver.admin` and default to `op`.
 
 ---
 
-## 5. Build & Test Instructions
+## 6. Build & Test Instructions
 
 ### Prerequisites
 - JDK 17 or JDK 21+ (supports `--release 8` cross-compilation)
@@ -112,9 +130,22 @@ mvn clean test package -Pmodern-java21
   </dependency>
   ```
 
+### Releasing (GitHub Releases, Modrinth, SpigotMC)
+
+1. Bump `<version>` in `pom.xml` and add a matching `## [x.y.z]` entry to `CHANGELOG.md`.
+2. Tag and push:
+   ```bash
+   git tag v1.0.1
+   git push origin v1.0.1
+   ```
+3. [`.github/workflows/release.yml`](.github/workflows/release.yml) then builds and tests the JAR and:
+   - **GitHub Releases:** creates the release with `OptimizeServer.jar`, checksums, and the CHANGELOG notes.
+   - **Modrinth:** uploads a new version (loaders: Bukkit, Spigot, Paper, Purpur, Folia; every Minecraft release from 1.8.8 onward). This step needs the repository secret `MODRINTH_TOKEN` (a Modrinth PAT with the *Create versions* scope) and the repository variable `MODRINTH_PROJECT_ID`. If either one is missing, the step is skipped.
+   - **SpigotMC:** SpigotMC has no upload API, so use *Post Update* on the resource page and upload the JAR from the GitHub Release. You can paste the page description from [`docs/publishing/spigot-description.bbcode`](docs/publishing/spigot-description.bbcode).
+
 ---
 
-## 6. Dependencies
+## 7. Dependencies
 
 - `org.spigotmc:spigot-api` (`provided` — never shaded into the plugin JAR)
 - `me.lucko:spark-api:0.1-SNAPSHOT` (`provided`, `optional` — never bundled)
@@ -123,7 +154,7 @@ mvn clean test package -Pmodern-java21
 
 ---
 
-## 7. Known Limitations
+## 8. Known Limitations
 
 1. **Physical Network Latency (RTT):** A server plugin cannot reduce physical internet round-trip time between a player and the host. `NetworkMonitor` separates physical player RTT from server-side tick-overrun and packet processing overhead.
 2. **Per-Plugin CPU Attribution:** Exact per-plugin CPU time requires stack sampling via Spark (`/os profile start`). Without an active profiler, `TaskMonitor` reports scheduled task and worker volumes per plugin without falsely claiming exact CPU share.

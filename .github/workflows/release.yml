@@ -1,0 +1,151 @@
+name: Release (GitHub Releases + Modrinth)
+
+# Triggered by pushing a version tag, e.g.:
+#   git tag v1.0.1 && git push origin v1.0.1
+# The tag (without the leading "v") must match <version> in pom.xml.
+on:
+  push:
+    tags: [ "v*" ]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release (e.g. v1.0.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      # Optional: set repository secret MODRINTH_TOKEN (scope: "Create versions")
+      # and repository variable MODRINTH_PROJECT_ID to enable Modrinth publishing.
+      MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+      MODRINTH_PROJECT_ID: ${{ vars.MODRINTH_PROJECT_ID }}
+
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up JDK 21 (cross-compiles universal Java 8 bytecode)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Verify tag matches pom.xml version
+        id: version
+        run: |
+          POM_VERSION=$(mvn -B -q help:evaluate -Dexpression=project.version -DforceStdout)
+          TAG_VERSION="${RELEASE_TAG#v}"
+          echo "pom.xml version: $POM_VERSION | tag version: $TAG_VERSION"
+          if [ "$POM_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Tag $RELEASE_TAG does not match pom.xml version $POM_VERSION"
+            exit 1
+          fi
+          echo "version=$POM_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Compile, Run Automated Tests, and Package OptimizeServer.jar
+        run: mvn -B clean test package
+
+      - name: Generate checksums
+        run: |
+          cd target
+          sha256sum OptimizeServer.jar > OptimizeServer.jar.sha256
+          sha512sum OptimizeServer.jar > OptimizeServer.jar.sha512
+          cat OptimizeServer.jar.sha256
+
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          tr -d '\r' < CHANGELOG.md | awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)." > RELEASE_NOTES.md
+          fi
+          {
+            echo ""
+            echo "---"
+            echo "**Downloads:** [Modrinth](https://modrinth.com/plugin/optimizeserver) · [SpigotMC](https://www.spigotmc.org/search/?q=OptimizeServer&t=resource_update) · [GitHub Releases](https://github.com/${{ github.repository }}/releases)"
+            echo ""
+            echo "**Compatibility:** Spigot, Paper, Purpur, Pufferfish, Folia, Leaves, Gale · Minecraft 1.8.8 – 1.21.x+ · Java 8+"
+            echo ""
+            echo "**SHA-256:** \`$(cut -d' ' -f1 target/OptimizeServer.jar.sha256)\`"
+          } >> RELEASE_NOTES.md
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: OptimizeServer ${{ steps.version.outputs.version }}
+          body_path: RELEASE_NOTES.md
+          make_latest: true
+          files: |
+            target/OptimizeServer.jar
+            target/OptimizeServer.jar.sha256
+            target/OptimizeServer.jar.sha512
+
+      - name: Publish to Modrinth
+        if: env.MODRINTH_TOKEN != '' && env.MODRINTH_PROJECT_ID != ''
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          UA="NotGamerPratham/OptimizeServer/$VERSION (github.com/${{ github.repository }})"
+
+          # Every Minecraft release version from 1.8.8 onwards (compatibility floor of the universal JAR).
+          curl -fsSL -A "$UA" https://api.modrinth.com/v2/tag/game_version -o game_versions.json
+          FLOOR_DATE=$(jq -r '.[] | select(.version=="1.8.8") | .date' game_versions.json)
+          GAME_VERSIONS=$(jq -c --arg d "$FLOOR_DATE" '[.[] | select(.version_type=="release" and .date >= $d) | .version]' game_versions.json)
+
+          jq -n \
+            --arg project "$MODRINTH_PROJECT_ID" \
+            --arg version "$VERSION" \
+            --rawfile changelog RELEASE_NOTES.md \
+            --argjson games "$GAME_VERSIONS" \
+            '{
+              project_id: $project,
+              name: ("OptimizeServer " + $version),
+              version_number: $version,
+              changelog: $changelog,
+              version_type: "release",
+              featured: true,
+              loaders: ["bukkit", "spigot", "paper", "purpur", "folia"],
+              game_versions: $games,
+              dependencies: [ { project_id: "fALzjamp", dependency_type: "optional" } ],
+              file_parts: ["jar"],
+              primary_file: "jar"
+            }' > modrinth.json
+
+          HTTP_CODE=$(curl -sS -o modrinth_response.json -w "%{http_code}" \
+            -A "$UA" \
+            -H "Authorization: $MODRINTH_TOKEN" \
+            -F "data=@modrinth.json;type=application/json" \
+            -F "jar=@target/OptimizeServer.jar;type=application/java-archive" \
+            https://api.modrinth.com/v2/version)
+          cat modrinth_response.json; echo
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::error::Modrinth upload failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+          echo "::notice::Published OptimizeServer $VERSION to Modrinth"
+
+      - name: Modrinth publishing skipped
+        if: env.MODRINTH_TOKEN == '' || env.MODRINTH_PROJECT_ID == ''
+        run: echo "::notice::Modrinth upload skipped - set secret MODRINTH_TOKEN and variable MODRINTH_PROJECT_ID to enable it."
+
+      - name: SpigotMC upload reminder
+        run: |
+          {
+            echo "### SpigotMC"
+            echo "SpigotMC has no public upload API, so updates must be posted manually:"
+            echo "1. Download \`OptimizeServer.jar\` from the GitHub Release ${RELEASE_TAG}."
+            echo "2. On your SpigotMC resource page choose **Post Update**, upload the JAR, and paste the release notes."
+            echo "   (Alternatively, set the resource to an *external download* pointing to the GitHub Releases page.)"
+          } >> "$GITHUB_STEP_SUMMARY"

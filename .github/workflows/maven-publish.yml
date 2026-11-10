@@ -5,8 +5,6 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
-  release:
-    types: [ created ]
   workflow_dispatch:
 
 permissions:
@@ -40,9 +38,18 @@ jobs:
           name: OptimizeServer
           path: target/OptimizeServer.jar
 
+      # GitHub Packages rejects re-uploading an existing non-SNAPSHOT version with HTTP 409.
+      # Treat that as "already published" so pushes after a release don't fail the check.
       - name: Publish Package to GitHub Packages Maven Registry
         if: github.event_name != 'pull_request'
-        run: mvn -B deploy -DskipTests
+        run: |
+          if ! mvn -B deploy -DskipTests 2>&1 | tee deploy.log; then
+            if grep -q "409" deploy.log; then
+              echo "::notice::This version is already published to GitHub Packages; bump <version> in pom.xml to publish a new one."
+            else
+              exit 1
+            fi
+          fi
         env:
           MAVEN_USERNAME: ${{ github.actor }}
           MAVEN_PASSWORD: ${{ secrets.GITHUB_TOKEN }}

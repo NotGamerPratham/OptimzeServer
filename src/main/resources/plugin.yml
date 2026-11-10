@@ -3,7 +3,7 @@ version: '${project.version}'
 main: com.pratham.optimizeserver.OptimizeServer
 author: NotGamerPratham
 description: Advanced Minecraft server performance engineering, bottleneck diagnostics, and safe execution optimization plugin.
-website: https://github.com/NotGamerPratham/OptimizeServer
+website: https://github.com/NotGamerPratham/OptimzeServer
 api-version: '1.13'
 folia-supported: true
 load: POSTWORLD
