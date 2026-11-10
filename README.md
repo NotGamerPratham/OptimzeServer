@@ -5,7 +5,7 @@
 </p>
 
 [![Modrinth](https://img.shields.io/badge/Modrinth-Download-00AF5C?logo=modrinth&logoColor=white)](https://modrinth.com/plugin/optimizeserver-notgamerpratham)
-[![SpigotMC](https://img.shields.io/badge/SpigotMC-Download-ED8106?logo=spigotmc&logoColor=white)](https://www.spigotmc.org/search/?q=OptimizeServer&t=resource_update)
+[![SpigotMC](https://img.shields.io/badge/SpigotMC-Download-ED8106?logo=spigotmc&logoColor=white)](https://www.spigotmc.org/resources/optimizeserver.140480/)
 [![GitHub Release](https://img.shields.io/github/v/release/NotGamerPratham/OptimzeServer?logo=github&label=GitHub%20Release)](https://github.com/NotGamerPratham/OptimzeServer/releases/latest)
 [![Java CI](https://github.com/NotGamerPratham/OptimzeServer/actions/workflows/maven.yml/badge.svg)](https://github.com/NotGamerPratham/OptimzeServer/actions/workflows/maven.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
