@@ -1,0 +1,55 @@
+name: OptimizeServer
+version: '${project.version}'
+main: com.pratham.optimizeserver.OptimizeServer
+author: NotGamerPratham
+description: Advanced Minecraft server performance engineering, bottleneck diagnostics, and safe execution optimization plugin.
+website: https://github.com/NotGamerPratham/OptimizeServer
+api-version: '1.13'
+folia-supported: true
+load: POSTWORLD
+softdepend:
+  - spark
+  - Chunky
+
+commands:
+  optimizeserver:
+    description: Primary administrative command for OptimizeServer diagnostics, monitoring, and optimization.
+    usage: /<command> <help|version|status|tps|mspt|cpu|memory|network|chunks|entities|diagnose|profile|health|optimize|report|reload>
+    aliases:
+      - os
+    permission: optimizeserver.status
+    permission-message: "§c[OptimizeServer] Access denied. You do not have permission to execute this administrative operation."
+
+permissions:
+  optimizeserver.admin:
+    description: Grants full administrative access to all OptimizeServer commands and operations.
+    default: op
+    children:
+      optimizeserver.status: true
+      optimizeserver.diagnose: true
+      optimizeserver.optimize: true
+      optimizeserver.profile: true
+      optimizeserver.chunks: true
+      optimizeserver.report: true
+      optimizeserver.reload: true
+  optimizeserver.status:
+    description: Allows viewing server performance status, TPS, MSPT, CPU, memory, network, chunks, and entities.
+    default: op
+  optimizeserver.diagnose:
+    description: Allows executing bottleneck diagnostics across server subsystems.
+    default: op
+  optimizeserver.optimize:
+    description: Allows viewing, enabling, disabling, and rolling back internal optimization modules.
+    default: op
+  optimizeserver.profile:
+    description: Allows managing Spark profiling sessions, memory diagnostics, and health reports.
+    default: op
+  optimizeserver.chunks:
+    description: Allows inspecting chunk monitoring and managing Chunky pre-generation operations.
+    default: op
+  optimizeserver.report:
+    description: Allows generating and inspecting local diagnostic performance reports.
+    default: op
+  optimizeserver.reload:
+    description: Allows reloading and re-validating OptimizeServer configuration.
+    default: op

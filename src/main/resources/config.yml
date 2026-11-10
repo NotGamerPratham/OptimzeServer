@@ -1,0 +1,187 @@
+# ==============================================================================
+# OptimizeServer Configuration
+# Author: NotGamerPratham
+# ==============================================================================
+# Philosophy:
+# - Maximum execution efficiency
+# - Minimum unnecessary overhead
+# - Intelligent performance diagnostics
+# - Universal compatibility
+# - Zero intentional gameplay modifications
+# ==============================================================================
+
+config-version: 2
+
+general:
+  enabled: true
+  debug-logging: false
+  console-prefix: "[OptimizeServer]"
+  # External telemetry is disabled by default and never transmits without explicit consent
+  telemetry-enabled: false
+  log-rotation:
+    enabled: true
+    max-file-size-kb: 2048
+    max-archives: 10
+
+compatibility:
+  auto-detect-platform: true
+  force-safe-mode-on-unknown-platform: true
+  folia-region-safe-mode: true
+  emit-compatibility-warnings: true
+  strict-api-verification: true
+
+monitoring:
+  enabled: true
+  sampling:
+    # Tick monitoring interval in server ticks (1 = every tick for monotonic MSPT accuracy)
+    tick-sample-interval-ticks: 1
+    # System/JVM metric snapshot interval in server ticks (20 = 1 second)
+    system-sample-interval-ticks: 20
+    # World/Chunk/Entity lightweight summary interval in server ticks (100 = 5 seconds)
+    world-sample-interval-ticks: 100
+    # Storage/Task inspection interval in milliseconds (async)
+    background-sample-interval-ms: 5000
+  retention:
+    max-snapshots: 900
+    rolling-windows-seconds:
+      - 5
+      - 30
+      - 60
+      - 300
+      - 900
+  thresholds:
+    tps-warning: 18.5
+    tps-critical: 15.0
+    mspt-warning: 40.0
+    mspt-critical: 50.0
+    mspt-p95-warning: 45.0
+    mspt-p99-critical: 65.0
+  cpu:
+    enabled: true
+    process-usage-warning-percent: 75.0
+    process-usage-critical-percent: 90.0
+    system-usage-warning-percent: 85.0
+    system-usage-critical-percent: 95.0
+  memory:
+    enabled: true
+    heap-usage-warning-percent: 80.0
+    heap-usage-critical-percent: 92.0
+    gc-pause-warning-ms: 50.0
+    gc-pause-critical-ms: 150.0
+    never-force-system-gc: true
+  network:
+    enabled: true
+    ping-warning-ms: 180.0
+    ping-critical-ms: 350.0
+    track-packet-processing-overhead: true
+  chunks:
+    enabled: true
+    loaded-chunks-warning: 2500
+    loaded-chunks-critical: 5000
+    chunk-load-rate-warning-per-sec: 40.0
+    chunk-gen-rate-warning-per-sec: 12.0
+  entities:
+    enabled: true
+    total-entities-warning: 3000
+    total-entities-critical: 6000
+    tile-entities-warning: 4000
+  tasks:
+    enabled: true
+    pending-tasks-warning: 250
+    active-workers-warning: 32
+  storage:
+    enabled: true
+    free-space-warning-mb: 2048
+    free-space-critical-mb: 512
+    io-latency-warning-ms: 25.0
+
+optimization:
+  # Supported modes: AUTOMATIC_SAFE, HYBRID_CONDITIONAL, MANUAL_ONLY, SAFE_MODE
+  mode: HYBRID_CONDITIONAL
+  validate-before-activation: true
+  auto-rollback-on-regression: true
+  modules:
+    # Automatic Safe Optimizations (Internal plugin execution efficiency)
+    config-lookup-cache:
+      enabled: true
+      max-entries: 512
+    monitoring-buffer-pool:
+      enabled: true
+      pool-capacity: 64
+    bounded-metric-ring:
+      enabled: true
+      ring-size: 1800
+    zero-alloc-aggregation:
+      enabled: true
+    redundant-query-coalescer:
+      enabled: true
+      coalesce-window-ms: 250
+    diagnostic-deduplicator:
+      enabled: true
+      dedup-window-seconds: 30
+    task-batch-coordinator:
+      enabled: true
+    # Conditional Optimizations (Validated internal adaptive adjustments)
+    adaptive-monitoring-sampler:
+      enabled: true
+      min-world-sample-ticks: 100
+      max-world-sample-ticks: 400
+    worker-pool-governor:
+      enabled: true
+    diagnostic-result-cache:
+      enabled: true
+      ttl-millis: 3000
+    adaptive-telemetry-batcher:
+      enabled: true
+      batch-size: 32
+
+safety:
+  enforce-gameplay-invariants: true
+  disallow-entity-removal: true
+  disallow-ai-modification: true
+  disallow-tick-skipping: true
+  disallow-view-distance-changes: true
+  disallow-simulation-distance-changes: true
+  disallow-gamerule-changes: true
+  disallow-world-data-mutation: true
+  disallow-packet-manipulation: true
+  strict-thread-ownership: true
+
+workers:
+  async-core-threads: 2
+  async-max-threads: 4
+  queue-capacity: 256
+  keep-alive-seconds: 60
+  shutdown-timeout-seconds: 10
+
+diagnostics:
+  enabled: true
+  min-confidence-threshold: 0.55
+  anomaly-zscore-threshold: 2.5
+  trend-window-samples: 30
+  max-findings-history: 200
+
+alerts:
+  console-alerts-enabled: true
+  admin-permission-broadcast: false
+  alert-cooldown-seconds: 60
+  min-severity: HIGH
+
+reports:
+  directory: "reports"
+  max-saved-reports: 50
+  retention-days: 14
+  include-jvm-flags: true
+  include-recommendations: true
+
+integrations:
+  spark:
+    enabled: true
+    detect-paper-bundled: true
+    never-auto-upload: true
+    prefer-api-over-commands: true
+  chunky:
+    enabled: true
+    never-auto-start-generation: true
+    max-recommended-radius-blocks: 5000
+    safe-tps-floor-for-generation: 18.0

@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.pratham</groupId>
+    <artifactId>OptimizeServer</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <name>OptimizeServer</name>
+    <description>Production-grade Minecraft server performance engineering, diagnostics, and non-invasive execution optimization plugin.</description>
+    <url>https://github.com/NotGamerPratham/OptimizeServer</url>
+
+    <developers>
+        <developer>
+            <id>NotGamerPratham</id>
+            <name>NotGamerPratham</name>
+            <roles>
+                <role>Author</role>
+                <role>Lead Architect</role>
+            </roles>
+        </developer>
+    </developers>
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+        <java.release.version>8</java.release.version>
+        <spigot.api.version>1.16.5-R0.1-SNAPSHOT</spigot.api.version>
+        <spark.api.version>0.1-SNAPSHOT</spark.api.version>
+        <chunky.api.version>1.2.86</chunky.api.version>
+        <junit.version>5.10.2</junit.version>
+    </properties>
+
+    <repositories>
+        <repository>
+            <id>spigotmc-repo</id>
+            <url>https://hub.spigotmc.org/nexus/content/repositories/snapshots/</url>
+        </repository>
+        <repository>
+            <id>papermc-repo</id>
+            <url>https://repo.papermc.io/repository/maven-public/</url>
+        </repository>
+        <repository>
+            <id>sonatype</id>
+            <url>https://oss.sonatype.org/content/groups/public/</url>
+        </repository>
+        <repository>
+            <id>lucko-repo</id>
+            <url>https://repo.lucko.me/</url>
+        </repository>
+        <repository>
+            <id>codemc-repo</id>
+            <url>https://repo.codemc.io/repository/maven-public/</url>
+        </repository>
+    </repositories>
+
+    <dependencies>
+        <!-- Server API (never shaded into final plugin) -->
+        <dependency>
+            <groupId>org.spigotmc</groupId>
+            <artifactId>spigot-api</artifactId>
+            <version>${spigot.api.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Optional Spark Profiler API (never bundled into final plugin) -->
+        <dependency>
+            <groupId>me.lucko</groupId>
+            <artifactId>spark-api</artifactId>
+            <version>${spark.api.version}</version>
+            <scope>provided</scope>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- Optional Chunky Pre-generation API (never bundled into final plugin) -->
+        <dependency>
+            <groupId>org.popcraft</groupId>
+            <artifactId>chunky-common</artifactId>
+            <version>${chunky.api.version}</version>
+            <scope>provided</scope>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- Unit and Integration Testing -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>OptimizeServer</finalName>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+            </resource>
+        </resources>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <release>${java.release.version}</release>
+                    <encoding>UTF-8</encoding>
+                    <compilerArgs>
+                        <arg>-Xlint:all,-serial,-processing</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <version>3.3.1</version>
+                <configuration>
+                    <encoding>UTF-8</encoding>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+                <configuration>
+                    <useModulePath>false</useModulePath>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.1</version>
+                <configuration>
+                    <archive>
+                        <manifestEntries>
+                            <Implementation-Title>${project.name}</Implementation-Title>
+                            <Implementation-Version>${project.version}</Implementation-Version>
+                            <Implementation-Vendor>NotGamerPratham</Implementation-Vendor>
+                            <Multi-Release>false</Multi-Release>
+                        </manifestEntries>
+                    </archive>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <!-- Default Universal Compatibility Profile (Java 8+ bytecode, MC 1.8.8 - 1.21.x+) -->
+        <profile>
+            <id>universal-java8</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <properties>
+                <java.release.version>8</java.release.version>
+                <spigot.api.version>1.16.5-R0.1-SNAPSHOT</spigot.api.version>
+                <chunky.api.version>1.2.86</chunky.api.version>
+            </properties>
+        </profile>
+
+        <!-- Modern Paper / Folia Java 17 Target Profile (MC 1.18 - 1.20.4) -->
+        <profile>
+            <id>modern-java17</id>
+            <properties>
+                <java.release.version>17</java.release.version>
+                <spigot.api.version>1.20.4-R0.1-SNAPSHOT</spigot.api.version>
+                <chunky.api.version>1.3.146</chunky.api.version>
+            </properties>
+        </profile>
+
+        <!-- Latest Paper / Folia Java 21 Target Profile (MC 1.20.5 - 1.21.x+) -->
+        <profile>
+            <id>modern-java21</id>
+            <properties>
+                <java.release.version>21</java.release.version>
+                <spigot.api.version>1.21.1-R0.1-SNAPSHOT</spigot.api.version>
+                <chunky.api.version>1.4.40</chunky.api.version>
+            </properties>
+        </profile>
+    </profiles>
+</project>
