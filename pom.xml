@@ -5,13 +5,27 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>com.pratham</groupId>
-    <artifactId>OptimizeServer</artifactId>
+    <artifactId>optimizeserver</artifactId>
     <version>1.0.0</version>
     <packaging>jar</packaging>
 
     <name>OptimizeServer</name>
     <description>Production-grade Minecraft server performance engineering, diagnostics, and non-invasive execution optimization plugin.</description>
-    <url>https://github.com/NotGamerPratham/OptimizeServer</url>
+    <url>https://github.com/NotGamerPratham/OptimzeServer</url>
+
+    <scm>
+        <connection>scm:git:git://github.com/NotGamerPratham/OptimzeServer.git</connection>
+        <developerConnection>scm:git:ssh://github.com:NotGamerPratham/OptimzeServer.git</developerConnection>
+        <url>https://github.com/NotGamerPratham/OptimzeServer/tree/main</url>
+    </scm>
+
+    <distributionManagement>
+        <repository>
+            <id>github</id>
+            <name>GitHub notgamerpratham Apache Maven Packages</name>
+            <url>https://maven.pkg.github.com/notgamerpratham/optimzeserver</url>
+        </repository>
+    </distributionManagement>
 
     <developers>
         <developer>

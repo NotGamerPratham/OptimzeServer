@@ -2,8 +2,10 @@
 # OptimizeServer - Git Ignore Rules
 # ==============================================================================
 
-# Maven Build Output
+# Maven Build Output & Local Credentials (Never commit tokens)
 target/
+settings.xml
+.mvn/settings.xml
 pom.xml.tag
 pom.xml.releaseBackup
 pom.xml.versionsBackup

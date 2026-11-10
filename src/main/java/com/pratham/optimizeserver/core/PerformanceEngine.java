@@ -4,6 +4,7 @@ import com.pratham.optimizeserver.analyzer.DiagnosticCoordinator;
 import com.pratham.optimizeserver.compatibility.CompatibilityManager;
 import com.pratham.optimizeserver.compatibility.CompatibilityReport;
 import com.pratham.optimizeserver.config.ConfigManager;
+import com.pratham.optimizeserver.integrations.DependencyAutoInstaller;
 import com.pratham.optimizeserver.integrations.chunky.ChunkyIntegration;
 import com.pratham.optimizeserver.integrations.spark.SparkIntegration;
 import com.pratham.optimizeserver.metrics.MetricRegistry;
@@ -69,6 +70,7 @@ public final class PerformanceEngine implements EngineLifecycle {
     private OptimizationManager optimizationManager;
     private SparkIntegration sparkIntegration;
     private ChunkyIntegration chunkyIntegration;
+    private DependencyAutoInstaller dependencyAutoInstaller;
     private ReportGenerator reportGenerator;
 
     private TaskHandle tickSamplerHandle;
@@ -165,6 +167,22 @@ public final class PerformanceEngine implements EngineLifecycle {
 
         this.sparkIntegration = new SparkIntegration(server, compatReport);
         this.chunkyIntegration = new ChunkyIntegration(server, configManager);
+
+        File pluginsDir = dataFolder.getParentFile() != null ? dataFolder.getParentFile() : new File(dataFolder, "plugins");
+        this.dependencyAutoInstaller = new DependencyAutoInstaller(
+                server,
+                pluginsDir,
+                configManager,
+                compatReport,
+                scheduler,
+                sparkIntegration,
+                chunkyIntegration,
+                logger
+        );
+        if (plugin != null) {
+            this.dependencyAutoInstaller.checkAndInstallMissingAsync();
+        }
+
         this.reportGenerator = new ReportGenerator(dataFolder, configManager);
 
         // Capture initial baseline snapshot immediately so commands and diagnostics always have valid data
@@ -401,6 +419,7 @@ public final class PerformanceEngine implements EngineLifecycle {
     public OptimizationManager getOptimizationManager() { return optimizationManager; }
     public SparkIntegration getSparkIntegration() { return sparkIntegration; }
     public ChunkyIntegration getChunkyIntegration() { return chunkyIntegration; }
+    public DependencyAutoInstaller getDependencyAutoInstaller() { return dependencyAutoInstaller; }
     public ReportGenerator getReportGenerator() { return reportGenerator; }
 }
 

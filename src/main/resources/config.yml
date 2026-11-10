@@ -175,13 +175,23 @@ reports:
   include-recommendations: true
 
 integrations:
+  auto-install:
+    enabled: true
+    load-immediately-after-download: true
+    verify-sha512-checksum: true
+    connect-timeout-ms: 10000
+    read-timeout-ms: 15000
   spark:
     enabled: true
+    auto-install: true
+    download-url: "https://api.spiget.org/v2/resources/57242/download"
     detect-paper-bundled: true
     never-auto-upload: true
     prefer-api-over-commands: true
   chunky:
     enabled: true
+    auto-install: true
+    download-url: ""
     never-auto-start-generation: true
     max-recommended-radius-blocks: 5000
     safe-tps-floor-for-generation: 18.0

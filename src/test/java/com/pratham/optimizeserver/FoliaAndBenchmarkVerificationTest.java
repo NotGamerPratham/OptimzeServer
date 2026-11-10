@@ -5,6 +5,7 @@ import com.pratham.optimizeserver.compatibility.ServerPlatform;
 import com.pratham.optimizeserver.config.ConfigManager;
 import com.pratham.optimizeserver.core.EngineState;
 import com.pratham.optimizeserver.core.PerformanceEngine;
+import com.pratham.optimizeserver.integrations.DependencyAutoInstaller;
 import com.pratham.optimizeserver.metrics.MetricSnapshot;
 import com.pratham.optimizeserver.scheduler.TaskHandle;
 import org.bukkit.Location;
@@ -17,14 +18,18 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.InputStreamReader;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import java.util.jar.JarEntry;
+import java.util.jar.JarOutputStream;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -158,6 +163,7 @@ public class FoliaAndBenchmarkVerificationTest {
                 )
         );
         ConfigManager configManager = new ConfigManager(null, defaultConfig, Logger.getLogger("FoliaTest"));
+        defaultConfig.set("integrations.auto-install.enabled", false);
         configManager.processConfiguration(defaultConfig);
 
         Plugin dummyPlugin = (Plugin) Proxy.newProxyInstance(
@@ -213,6 +219,72 @@ public class FoliaAndBenchmarkVerificationTest {
 
         engine.stop();
         assertEquals(EngineState.STOPPED, engine.getState());
+    }
+
+    @Test
+    public void testDependencyAutoInstallerVerificationAndInstall(@TempDir File tempDir) throws Exception {
+        // Create a valid synthetic plugin JAR with plugin.yml
+        File sourceJar = new File(tempDir, "synthetic-dependency.jar");
+        JarOutputStream jos = new JarOutputStream(new FileOutputStream(sourceJar));
+        try {
+            JarEntry entry = new JarEntry("plugin.yml");
+            jos.putNextEntry(entry);
+            StringBuilder yaml = new StringBuilder();
+            yaml.append("name: SyntheticDep\nversion: 1.0.0\nmain: com.example.Main\n");
+            for (int i = 0; i < 10; i++) {
+                yaml.append("# padding line to exceed 256-byte minimum archive threshold ").append(i).append("\n");
+            }
+            jos.write(yaml.toString().getBytes(StandardCharsets.UTF_8));
+            jos.closeEntry();
+        } finally {
+            jos.close();
+        }
+
+        String validSha512 = DependencyAutoInstaller.computeSha512Hex(sourceJar);
+        assertTrue(DependencyAutoInstaller.validateJarArchive(sourceJar, validSha512));
+        assertFalse(DependencyAutoInstaller.validateJarArchive(sourceJar, "00000000000000000000000000000000"));
+
+        File pluginsDir = new File(tempDir, "plugins");
+        File pluginDataDir = new File(pluginsDir, "OptimizeServer");
+        pluginDataDir.mkdirs();
+
+        YamlConfiguration cfg = YamlConfiguration.loadConfiguration(
+                new InputStreamReader(
+                        FoliaAndBenchmarkVerificationTest.class.getResourceAsStream("/config.yml"),
+                        StandardCharsets.UTF_8
+                )
+        );
+        String localUrl = sourceJar.toURI().toURL().toExternalForm();
+        cfg.set("integrations.spark.download-url", localUrl);
+        cfg.set("integrations.chunky.download-url", localUrl);
+
+        ConfigManager configManager = new ConfigManager(null, cfg, Logger.getLogger("AutoInstallTest"));
+        configManager.processConfiguration(cfg);
+
+        Server paperServer = TestServerHarness.createMockServer(
+                "Paper", "git-Paper-496 (MC: 1.20.4)", "1.20.4-R0.1-SNAPSHOT", true);
+        PerformanceEngine engine = new PerformanceEngine(
+                null, paperServer, pluginDataDir, Logger.getLogger("AutoInstallEngine"), configManager);
+        engine.start();
+
+        List<DependencyAutoInstaller.InstallResult> firstRun =
+                engine.getDependencyAutoInstaller().checkAndInstallNow();
+        assertEquals(2, firstRun.size());
+        assertTrue(firstRun.get(0).isDownloadedNow());
+        assertTrue(firstRun.get(1).isDownloadedNow());
+        assertTrue(new File(pluginsDir, "spark.jar").exists());
+        assertTrue(new File(pluginsDir, "Chunky.jar").exists());
+
+        // Second run should detect existing JARs and skip re-downloading
+        List<DependencyAutoInstaller.InstallResult> secondRun =
+                engine.getDependencyAutoInstaller().checkAndInstallNow();
+        assertEquals(2, secondRun.size());
+        assertTrue(secondRun.get(0).isAlreadyInstalled());
+        assertFalse(secondRun.get(0).isDownloadedNow());
+        assertTrue(secondRun.get(1).isAlreadyInstalled());
+        assertFalse(secondRun.get(1).isDownloadedNow());
+
+        engine.stop();
     }
 }
 

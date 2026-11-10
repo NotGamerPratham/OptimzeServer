@@ -44,9 +44,8 @@ OptimizeServer **never** skips server ticks, falsifies TPS readings, removes ent
 ## 3. Installation Instructions
 
 1. Copy `target/OptimizeServer.jar` into your server's `plugins/` directory.
-2. *(Optional)* Install **Spark** (bundled automatically on Paper 1.21+) for stack-trace CPU/memory profiling integration.
-3. *(Optional)* Install **Chunky** for administrator-controlled chunk pre-generation integration.
-4. Start or restart the server. Configuration is generated at `plugins/OptimizeServer/config.yml` and local diagnostic reports are saved under `plugins/OptimizeServer/reports/`.
+2. **Automatic Spark & Chunky Installation:** On server startup, [`DependencyAutoInstaller`](src/main/java/com/pratham/optimizeserver/integrations/DependencyAutoInstaller.java) automatically checks whether **Spark** and **Chunky** are already installed or bundled (e.g., Paper 1.21+ bundled Spark). If either is missing, OptimizeServer asynchronously downloads the official plugin JAR from Modrinth/Spiget, verifies its cryptographic SHA-512 and JAR archive integrity, installs it into `plugins/`, and loads it on the main server thread.
+3. Configuration is generated at `plugins/OptimizeServer/config.yml` and local diagnostic reports are saved under `plugins/OptimizeServer/reports/`.
 
 ---
 
@@ -92,7 +91,26 @@ mvn clean test package -Pmodern-java17
 # Modern Java 21 build profile
 mvn clean test package -Pmodern-java21
 ```
-The compiled distributable artifact is produced at `target/OptimizeServer.jar`.
+# OptimizeServer.jar is produced at target/OptimizeServer.jar
+
+### Publishing & Consuming via GitHub Packages (Apache Maven Registry)
+
+`pom.xml` is pre-configured with `<artifactId>optimizeserver</artifactId>` (lowercase as required by GitHub Packages) and `<distributionManagement>` pointing to `https://maven.pkg.github.com/notgamerpratham/optimzeserver`.
+
+- **Automated Publishing (GitHub Actions):** Pushing to `main` or creating a release runs [`.github/workflows/maven-publish.yml`](.github/workflows/maven-publish.yml), which executes all JUnit tests, uploads `OptimizeServer.jar`, and publishes `com.pratham:optimizeserver:1.0.0` to GitHub Packages using `GITHUB_TOKEN`.
+- **Local Publishing (`mvn deploy`):** Configure `~/.m2/settings.xml` with server `<id>github</id>`, your GitHub username, and a classic Personal Access Token (`write:packages`, `read:packages`), then run:
+  ```bash
+  mvn deploy
+  ```
+- **Using as a Maven Dependency:**
+  ```xml
+  <dependency>
+      <groupId>com.pratham</groupId>
+      <artifactId>optimizeserver</artifactId>
+      <version>1.0.0</version>
+      <scope>provided</scope>
+  </dependency>
+  ```
 
 ---
 

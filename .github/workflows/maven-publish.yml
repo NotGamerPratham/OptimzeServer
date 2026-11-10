@@ -1,0 +1,48 @@
+name: Maven Build, Test & GitHub Packages Publish
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  release:
+    types: [ created ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21 (cross-compiles universal Java 8 bytecode)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          server-id: github
+          server-username: ${{ github.actor }}
+          server-password: ${{ secrets.GITHUB_TOKEN }}
+          cache: 'maven'
+
+      - name: Compile, Run Automated Tests, and Package OptimizeServer.jar
+        run: mvn -B clean test package
+
+      - name: Upload OptimizeServer.jar Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OptimizeServer
+          path: target/OptimizeServer.jar
+
+      - name: Publish Package to GitHub Packages Maven Registry
+        if: github.event_name != 'pull_request'
+        run: mvn -B deploy -DskipTests
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

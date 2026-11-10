@@ -41,7 +41,12 @@ public final class ConfigMigrator {
 
             setDefaultIfMissing(config, "monitoring.retention.rolling-windows-seconds", Arrays.asList(5, 30, 60, 300, 900));
             setDefaultIfMissing(config, "safety.enforce-gameplay-invariants", true);
+            setDefaultIfMissing(config, "integrations.auto-install.enabled", true);
+            setDefaultIfMissing(config, "integrations.auto-install.load-immediately-after-download", true);
+            setDefaultIfMissing(config, "integrations.auto-install.verify-sha512-checksum", true);
+            setDefaultIfMissing(config, "integrations.spark.auto-install", true);
             setDefaultIfMissing(config, "integrations.spark.never-auto-upload", true);
+            setDefaultIfMissing(config, "integrations.chunky.auto-install", true);
             setDefaultIfMissing(config, "integrations.chunky.never-auto-start-generation", true);
 
             config.set("config-version", CURRENT_CONFIG_VERSION);
