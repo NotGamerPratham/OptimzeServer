@@ -21,6 +21,10 @@ public final class NetworkMonitor {
     private final boolean hasSpigotPing;
     private Method playerGetPingMethod;
     private Method spigotGetPingMethod;
+    private volatile Class<?> legacyPlayerClass;
+    private volatile Method legacyGetHandleMethod;
+    private volatile Field legacyPingField;
+    private volatile boolean legacyLookupFailed = false;
 
     private final AtomicLong incomingEventCounter = new AtomicLong(0L);
     private final AtomicLong outgoingEventCounter = new AtomicLong(0L);
@@ -152,18 +156,33 @@ public final class NetworkMonitor {
             } catch (Throwable ignored) {
             }
         }
-        // Reflective fallback for legacy CraftBukkit / Spigot 1.8.8 - 1.16.5
-        try {
-            Method getHandle = player.getClass().getMethod("getHandle");
-            Object entityPlayer = getHandle.invoke(player);
-            if (entityPlayer != null) {
-                Field pingField = entityPlayer.getClass().getField("ping");
-                Object val = pingField.get(entityPlayer);
-                if (val instanceof Number) {
-                    return Math.max(0, ((Number) val).intValue());
+        // Reflective fallback for legacy CraftBukkit / Spigot 1.8.8 - 1.16.5 (cached per player implementation class)
+        if (!legacyLookupFailed) {
+            try {
+                Class<?> playerCls = player.getClass();
+                Method getHandle = this.legacyGetHandleMethod;
+                Field pingFld = this.legacyPingField;
+                if (getHandle == null || this.legacyPlayerClass != playerCls) {
+                    getHandle = playerCls.getMethod("getHandle");
+                    Object entityPlayer = getHandle.invoke(player);
+                    if (entityPlayer == null) {
+                        return 0;
+                    }
+                    pingFld = entityPlayer.getClass().getField("ping");
+                    this.legacyPlayerClass = playerCls;
+                    this.legacyGetHandleMethod = getHandle;
+                    this.legacyPingField = pingFld;
                 }
+                Object entityPlayer = getHandle.invoke(player);
+                if (entityPlayer != null && pingFld != null) {
+                    Object val = pingFld.get(entityPlayer);
+                    if (val instanceof Number) {
+                        return Math.max(0, ((Number) val).intValue());
+                    }
+                }
+            } catch (Throwable ignored) {
+                this.legacyLookupFailed = true;
             }
-        } catch (Throwable ignored) {
         }
         return 0;
     }

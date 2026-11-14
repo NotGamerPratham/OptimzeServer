@@ -9,15 +9,15 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.entity.EntitySpawnEvent;
 import org.bukkit.event.player.PlayerCommandPreprocessEvent;
-import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
-import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.event.world.ChunkUnloadEvent;
 
 /**
  * Passive, read-only Bukkit event listener feeding chunk, entity, and network telemetry counters.
+ * Intentionally excludes high-frequency PlayerMoveEvent and PlayerInteractEvent dispatches so
+ * 50+ active players generate near-zero listener overhead on the primary server thread.
  * Never cancels events or alters vanilla gameplay behaviour.
  */
 public final class ServerActivityListener implements Listener {
@@ -25,6 +25,7 @@ public final class ServerActivityListener implements Listener {
     private final ChunkMonitor chunkMonitor;
     private final EntityMonitor entityMonitor;
     private final NetworkMonitor networkMonitor;
+    private volatile boolean active = true;
 
     public ServerActivityListener(ChunkMonitor chunkMonitor,
                                   EntityMonitor entityMonitor,
@@ -34,8 +35,17 @@ public final class ServerActivityListener implements Listener {
         this.networkMonitor = networkMonitor;
     }
 
+    public void setActive(boolean active) {
+        this.active = active;
+    }
+
+    public boolean isActive() {
+        return active;
+    }
+
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onChunkLoad(ChunkLoadEvent event) {
+        if (!active) return;
         long start = System.nanoTime();
         if (chunkMonitor != null && event != null) {
             chunkMonitor.recordChunkLoad(event.isNewChunk());
@@ -47,6 +57,7 @@ public final class ServerActivityListener implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onChunkUnload(ChunkUnloadEvent event) {
+        if (!active) return;
         if (chunkMonitor != null) {
             chunkMonitor.recordChunkUnload();
         }
@@ -54,6 +65,7 @@ public final class ServerActivityListener implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onEntitySpawn(EntitySpawnEvent event) {
+        if (!active) return;
         if (entityMonitor != null && event != null) {
             entityMonitor.recordEntitySpawn(event.getEntityType());
         }
@@ -61,6 +73,7 @@ public final class ServerActivityListener implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onEntityDeath(EntityDeathEvent event) {
+        if (!active) return;
         if (entityMonitor != null && event != null) {
             entityMonitor.recordEntityRemove(event.getEntityType());
         }
@@ -68,41 +81,24 @@ public final class ServerActivityListener implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerJoin(PlayerJoinEvent event) {
-        long start = System.nanoTime();
-        if (networkMonitor != null) {
-            long dur = Math.max(500L, System.nanoTime() - start);
-            networkMonitor.recordIncomingTrafficEvent(dur);
-            networkMonitor.recordOutgoingTrafficEvent(dur);
-        }
+        if (!active || networkMonitor == null) return;
+        long dur = System.nanoTime();
+        networkMonitor.recordIncomingTrafficEvent(Math.max(1L, System.nanoTime() - dur));
+        networkMonitor.recordOutgoingTrafficEvent(1L);
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerQuit(PlayerQuitEvent event) {
-        if (networkMonitor != null) {
-            networkMonitor.recordIncomingTrafficEvent(500L);
-        }
-    }
-
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onPlayerMove(PlayerMoveEvent event) {
-        if (networkMonitor != null) {
-            networkMonitor.recordIncomingTrafficEvent(350L);
-        }
-    }
-
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onPlayerInteract(PlayerInteractEvent event) {
-        if (networkMonitor != null) {
-            networkMonitor.recordIncomingTrafficEvent(600L);
-            networkMonitor.recordOutgoingTrafficEvent(400L);
-        }
+        if (!active || networkMonitor == null) return;
+        long start = System.nanoTime();
+        networkMonitor.recordIncomingTrafficEvent(Math.max(1L, System.nanoTime() - start));
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerCommand(PlayerCommandPreprocessEvent event) {
-        if (networkMonitor != null) {
-            networkMonitor.recordIncomingTrafficEvent(750L);
-        }
+        if (!active || networkMonitor == null) return;
+        long start = System.nanoTime();
+        networkMonitor.recordIncomingTrafficEvent(Math.max(1L, System.nanoTime() - start));
     }
 }
 

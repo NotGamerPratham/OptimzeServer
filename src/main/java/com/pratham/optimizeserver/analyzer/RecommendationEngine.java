@@ -57,42 +57,66 @@ public final class RecommendationEngine {
         CompatibilityReport compat = bundle.getCompatibilityReport();
         JavaRuntimeInfo jvm = compat != null ? compat.getJavaRuntime() : null;
 
-        // 1. JVM Arguments
+        long heapMaxMb = s != null && s.getHeapMaxBytes() > 0L
+                ? (s.getHeapMaxBytes() / (1024L * 1024L))
+                : (Runtime.getRuntime().maxMemory() / (1024L * 1024L));
+
+        // 1. JVM Arguments (RAM-tier aware so small 1GB servers don't get >16GB ZGC advice)
         if (jvm != null) {
             if (!jvm.hasExplicitDisableExplicitGC()) {
                 list.add(new InfrastructureRecommendation(
                         "JVM Arguments",
                         "Add -XX:+DisableExplicitGC to JVM startup flags",
                         "Prevents third-party plugins or RMI timers from invoking System.gc() and causing stop-the-world tick spikes.",
-                        "Append '-XX:+DisableExplicitGC -XX:+AlwaysPreTouch' to your server startup script."
+                        "Append '-XX:+DisableExplicitGC -XX:+AlwaysPreTouch' to your server startup script (run '/os tune' for full flags)."
                 ));
             }
             if (!jvm.isUsingG1GC() && !jvm.isUsingZGC()) {
+                String collectorAdvice = heapMaxMb <= 1536L
+                        ? "Use low-footprint G1GC flags (-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=100 -XX:G1HeapRegionSize=4M -XX:G1ReservePercent=15 -XX:InitiatingHeapOccupancyPercent=25)."
+                        : (heapMaxMb >= 14336L && jvm.getFeatureVersion() >= 21
+                                ? "Use Generational ZGC (-XX:+UseZGC -XX:+ZGenerational) on Java 21+ or Aikar's G1GC flags."
+                                : "Use Aikar's G1GC flags (-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=130 -XX:G1NewSizePercent=30).");
                 list.add(new InfrastructureRecommendation(
                         "JVM Arguments",
-                        "Configure a low-pause garbage collector (G1GC or Generational ZGC)",
+                        "Configure a low-pause garbage collector (detected " + heapMaxMb + " MB max heap)",
                         "Active collectors " + jvm.getCollectorNames() + " may introduce longer stop-the-world pauses under chunk/entity load.",
-                        "Use Aikar's G1GC flags (-XX:+UseG1GC -XX:MaxGCPauseMillis=130 -XX:G1NewSizePercent=30) or Generational ZGC on Java 21+ with >=16GB RAM."
+                        collectorAdvice
                 ));
             }
         }
 
-        // 2. Heap Configuration
+        // 2. Heap Configuration & Server Engine
+        if (compat != null && !compat.getPlatform().isPaperCompatible() && !compat.getPlatform().isRegionThreaded()) {
+            list.add(new InfrastructureRecommendation(
+                    "Server Engine",
+                    "Upgrade from " + compat.getPlatform().getDisplayName() + " to Paper for non-gameplay engine optimizations",
+                    "Plain Spigot/CraftBukkit lacks Paper's async chunk loading/saving, optimized light engine, and reduced allocation footprint.",
+                    "Run Paper (drop-in compatible with Bukkit/Spigot plugins) to improve CPU and RAM efficiency without altering vanilla gameplay."
+            ));
+        }
         if (jvm != null && !jvm.hasMatchingXmsXmx()) {
             list.add(new InfrastructureRecommendation(
                     "Heap Configuration",
                     "Match initial heap (-Xms) and maximum heap (-Xmx)",
                     "Dynamic heap resizing during live gameplay causes OS page faults and GC pauses.",
-                    "Set -Xms equal to -Xmx in your startup flags and leave 1.5GB-2GB of host RAM for off-heap Metaspace/Netty buffers."
+                    heapMaxMb <= 1536L
+                            ? "Set -Xms equal to -Xmx (e.g. -Xms" + heapMaxMb + "M -Xmx" + heapMaxMb + "M) while leaving host RAM for OS/Metaspace/Netty."
+                            : "Set -Xms equal to -Xmx in your startup flags and leave 1.5GB-2GB of host RAM for off-heap Metaspace/Netty buffers."
             ));
         }
-        if (s != null && s.getHeapUsagePercent() > 82.0) {
+        double effectiveHeapPct = (s != null && s.getPostGcHeapMaxBytes() > 0L)
+                ? s.getPostGcHeapUsagePercent()
+                : (s != null ? s.getHeapUsagePercent() : 0.0);
+        if (s != null && (s.getHeapUsagePercent() > 82.0 || effectiveHeapPct > 80.0)) {
             long maxMb = s.getHeapMaxBytes() / (1024L * 1024L);
             list.add(new InfrastructureRecommendation(
                     "Heap Configuration",
-                    "Evaluate heap headroom (currently at " + String.format(Locale.ROOT, "%.1f%%", s.getHeapUsagePercent()) + " of " + maxMb + " MB)",
+                    "Evaluate heap headroom (live: " + String.format(Locale.ROOT, "%.1f%%", s.getHeapUsagePercent())
+                            + ", post-GC OldGen: " + String.format(Locale.ROOT, "%.1f%%", effectiveHeapPct)
+                            + " of " + maxMb + " MB)",
                     "High sustained heap occupancy increases GC frequency and old-generation promotion pressure.",
-                    "Inspect heap retainers via '/os profile memory' or increase -Xms/-Xmx if physical host RAM permits."
+                    "Inspect heap retainers via '/os profile memory' and '/os capacity', or increase -Xms/-Xmx if physical host RAM permits."
             ));
         }
 

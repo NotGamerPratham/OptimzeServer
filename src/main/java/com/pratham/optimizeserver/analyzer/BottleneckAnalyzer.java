@@ -87,12 +87,15 @@ public final class BottleneckAnalyzer {
             ));
         }
 
-        // 2. Memory Pressure
+        // 2. Memory Pressure (evaluate post-GC OldGen occupancy first when available to avoid YoungGen sawtooth noise)
         double heapPct = s.getHeapUsagePercent();
-        if (heapPct >= heapWarn) {
-            Severity sev = heapPct >= heapCrit ? Severity.CRITICAL : Severity.HIGH;
+        double postGcPct = s.getPostGcHeapUsagePercent();
+        double effectiveHeapPct = s.getPostGcHeapMaxBytes() > 0L ? postGcPct : heapPct;
+        if (effectiveHeapPct >= heapWarn || heapPct >= heapCrit) {
+            Severity sev = (effectiveHeapPct >= heapCrit || heapPct >= heapCrit) ? Severity.CRITICAL : Severity.HIGH;
             Map<String, String> metrics = new LinkedHashMap<String, String>();
             metrics.put("heapUsagePercent", formatDouble(heapPct));
+            metrics.put("postGcOldGenUsagePercent", formatDouble(postGcPct));
             metrics.put("heapUsedMb", String.valueOf(s.getHeapUsedBytes() / (1024L * 1024L)));
             metrics.put("heapMaxMb", String.valueOf(s.getHeapMaxBytes() / (1024L * 1024L)));
 
@@ -100,11 +103,16 @@ public final class BottleneckAnalyzer {
             ev.add("Heap utilization is at " + formatDouble(heapPct) + "% ("
                     + (s.getHeapUsedBytes() / (1024L * 1024L)) + " MB / "
                     + (s.getHeapMaxBytes() / (1024L * 1024L)) + " MB).");
+            if (s.getPostGcHeapMaxBytes() > 0L) {
+                ev.add("Post-GC Old-Generation retention is " + formatDouble(postGcPct) + "% ("
+                        + (s.getPostGcHeapUsedBytes() / (1024L * 1024L)) + " MB / "
+                        + (s.getPostGcHeapMaxBytes() / (1024L * 1024L)) + " MB).");
+            }
             if (trends != null && trends.getHeapGrowthPercentPerMinute() > 1.5) {
                 ev.add("Sustained heap growth of +" + formatDouble(trends.getHeapGrowthPercentPerMinute())
                         + "%/min detected across recent snapshots.");
             }
-            double conf = heapPct >= heapCrit ? 0.92 : 0.80;
+            double conf = effectiveHeapPct >= heapCrit ? 0.92 : 0.80;
             findings.add(new DiagnosticFinding(
                     nextId("MEM"),
                     now,
@@ -113,9 +121,8 @@ public final class BottleneckAnalyzer {
                     metrics,
                     ev,
                     conf,
-                    "Run '/os profile memory' to inspect heap histograms and identify plugins or world caches retaining old-generation objects.",
-                    "Verify -Xms matches -Xmx, evaluate loaded chunk count (" + s.getLoadedChunks()
-                            + "), and adjust bounded metric retention if memory is constrained.",
+                    "Run '/os profile memory' and '/os capacity' to inspect heap retainers and live player memory headroom.",
+                    "Verify -Xms matches -Xmx, run '/os tune' to apply non-gameplay chunk-GC settings, and allocate adequate heap headroom if host RAM allows.",
                     true
             ));
         }
@@ -227,8 +234,9 @@ public final class BottleneckAnalyzer {
         }
 
         // 6. Plugin-Task Overhead
-        if (s.getPendingServerTasks() >= taskWarn || s.getActiveServerWorkers() >= 32) {
-            Severity sev = tickElevated ? Severity.HIGH : Severity.MEDIUM;
+        boolean growingSyncLeak = bundle.getGrowingTaskPlugin() != null && bundle.getGrowingTaskPluginStreak() >= 3;
+        if (s.getPendingServerTasks() >= taskWarn || s.getActiveServerWorkers() >= 32 || growingSyncLeak) {
+            Severity sev = (tickElevated || growingSyncLeak) ? Severity.HIGH : Severity.MEDIUM;
             Map<String, String> metrics = new LinkedHashMap<String, String>();
             metrics.put("pendingServerTasks", String.valueOf(s.getPendingServerTasks()));
             metrics.put("activeServerWorkers", String.valueOf(s.getActiveServerWorkers()));
@@ -236,11 +244,22 @@ public final class BottleneckAnalyzer {
             List<String> ev = new ArrayList<String>();
             ev.add("Scheduler has " + s.getPendingServerTasks() + " pending tasks and "
                     + s.getActiveServerWorkers() + " active worker threads.");
-            String topPlugin = findDominantKey(bundle.getPendingTasksByPlugin());
-            if (topPlugin != null) {
-                ev.add("Highest scheduled task count belongs to plugin '" + topPlugin + "' ("
-                        + bundle.getPendingTasksByPlugin().get(topPlugin)
-                        + " tasks). Note: task count indicates scheduling volume, not proven CPU share.");
+            String topSyncPlugin = findDominantKey(bundle.getPendingSyncTasksByPlugin());
+            if (topSyncPlugin != null) {
+                ev.add("Highest synchronous main-thread task count belongs to plugin '" + topSyncPlugin + "' ("
+                        + bundle.getPendingSyncTasksByPlugin().get(topSyncPlugin) + " sync tasks).");
+            } else {
+                String topPlugin = findDominantKey(bundle.getPendingTasksByPlugin());
+                if (topPlugin != null) {
+                    ev.add("Highest scheduled task count belongs to plugin '" + topPlugin + "' ("
+                            + bundle.getPendingTasksByPlugin().get(topPlugin)
+                            + " tasks). Note: task count indicates scheduling volume, not proven CPU share.");
+                }
+            }
+            if (growingSyncLeak) {
+                ev.add("Monotonic growth in synchronous scheduled tasks detected for plugin '"
+                        + bundle.getGrowingTaskPlugin() + "' across " + bundle.getGrowingTaskPluginStreak()
+                        + " consecutive samples (possible uncancelled task leak).");
             }
             double conf = tickElevated ? 0.76 : 0.62;
             findings.add(new DiagnosticFinding(

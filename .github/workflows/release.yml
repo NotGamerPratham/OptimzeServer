@@ -1,7 +1,7 @@
 name: Release (GitHub Releases + Modrinth)
 
 # Triggered by pushing a version tag, e.g.:
-#   git tag v1.0.1 && git push origin v1.0.1
+#   git tag v1.2.0 && git push origin v1.2.0
 # The tag (without the leading "v") must match <version> in pom.xml.
 on:
   push:
@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to release (e.g. v1.0.0)"
+        description: "Existing tag to release (e.g. v1.2.0)"
         required: true
 
 permissions:

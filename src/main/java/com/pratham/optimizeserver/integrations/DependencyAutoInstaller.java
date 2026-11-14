@@ -48,7 +48,7 @@ public final class DependencyAutoInstaller {
             "https://api.modrinth.com/v2/project/chunky/version?loaders=%5B%22bukkit%22,%22paper%22,%22spigot%22,%22folia%22%5D";
     public static final String DEFAULT_CHUNKY_FALLBACK_URL = "https://api.spiget.org/v2/resources/81534/download";
 
-    private static final String USER_AGENT = "OptimizeServer/1.0.0 (by NotGamerPratham; Minecraft Server Plugin)";
+    private static final String DEFAULT_PLUGIN_VERSION = "1.2.0";
     private static final Pattern MODRINTH_URL_PATTERN = Pattern.compile("\"url\"\\s*:\\s*\"(https://cdn\\.modrinth\\.com/[^\"]+\\.jar)\"");
     private static final Pattern MODRINTH_SHA512_PATTERN = Pattern.compile("\"sha512\"\\s*:\\s*\"([0-9a-fA-F]{128})\"");
 
@@ -100,6 +100,7 @@ public final class DependencyAutoInstaller {
     private final SparkIntegration sparkIntegration;
     private final ChunkyIntegration chunkyIntegration;
     private final Logger logger;
+    private final String userAgent;
     private final List<InstallResult> lastResults = new CopyOnWriteArrayList<InstallResult>();
 
     public DependencyAutoInstaller(Server server,
@@ -110,6 +111,19 @@ public final class DependencyAutoInstaller {
                                    SparkIntegration sparkIntegration,
                                    ChunkyIntegration chunkyIntegration,
                                    Logger logger) {
+        this(server, pluginsDirectory, configManager, compatibilityReport, scheduler,
+                sparkIntegration, chunkyIntegration, logger, null);
+    }
+
+    public DependencyAutoInstaller(Server server,
+                                   File pluginsDirectory,
+                                   ConfigManager configManager,
+                                   CompatibilityReport compatibilityReport,
+                                   SchedulerAdapter scheduler,
+                                   SparkIntegration sparkIntegration,
+                                   ChunkyIntegration chunkyIntegration,
+                                   Logger logger,
+                                   String pluginVersion) {
         this.server = server;
         this.pluginsDirectory = pluginsDirectory != null ? pluginsDirectory : new File("plugins");
         this.configManager = configManager;
@@ -118,6 +132,10 @@ public final class DependencyAutoInstaller {
         this.sparkIntegration = sparkIntegration;
         this.chunkyIntegration = chunkyIntegration;
         this.logger = logger != null ? logger : Logger.getLogger("OptimizeServer");
+        String resolvedVer = (pluginVersion != null && !pluginVersion.trim().isEmpty())
+                ? pluginVersion.trim()
+                : DEFAULT_PLUGIN_VERSION;
+        this.userAgent = "OptimizeServer/" + resolvedVer + " (by NotGamerPratham; Minecraft Server Plugin)";
     }
 
     /**
@@ -284,7 +302,7 @@ public final class DependencyAutoInstaller {
             URL url = new URL(apiEndpoint);
             conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
-            conn.setRequestProperty("User-Agent", USER_AGENT);
+            conn.setRequestProperty("User-Agent", userAgent);
             conn.setRequestProperty("Accept", "application/json");
             conn.setConnectTimeout(connectTimeout);
             conn.setReadTimeout(readTimeout);
@@ -350,7 +368,7 @@ public final class DependencyAutoInstaller {
                 conn = (HttpURLConnection) url.openConnection();
                 conn.setInstanceFollowRedirects(true);
                 conn.setRequestMethod("GET");
-                conn.setRequestProperty("User-Agent", USER_AGENT);
+                conn.setRequestProperty("User-Agent", userAgent);
                 conn.setConnectTimeout(connectTimeout);
                 conn.setReadTimeout(readTimeout);
 

@@ -7,6 +7,7 @@ import com.pratham.optimizeserver.monitoring.TaskMonitor;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -136,9 +137,34 @@ public final class DiagnosticCoordinator {
                 return;
             }
             deduplicationTimestamps.put(sig, Long.valueOf(nowMillis));
+            if (deduplicationTimestamps.size() > 64) {
+                pruneExpiredDedupEntries(nowMillis);
+            }
         }
         findingsHistory.add(finding);
         while (findingsHistory.size() > maxFindingsHistory) {
+            findingsHistory.remove(0);
+        }
+    }
+
+    private void pruneExpiredDedupEntries(long nowMillis) {
+        Iterator<Map.Entry<String, Long>> it = deduplicationTimestamps.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<String, Long> e = it.next();
+            if (e.getValue() == null || (nowMillis - e.getValue().longValue()) >= dedupWindowMillis) {
+                it.remove();
+            }
+        }
+    }
+
+    /**
+     * Releases cached evaluation bundles and trims findings history under heap pressure.
+     */
+    public void trimForLowMemory(int targetMaxHistory) {
+        int safeCap = Math.max(10, targetMaxHistory);
+        this.cachedEvaluation = null;
+        this.deduplicationTimestamps.clear();
+        while (findingsHistory.size() > safeCap) {
             findingsHistory.remove(0);
         }
     }

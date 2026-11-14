@@ -5,6 +5,7 @@ import org.bukkit.Chunk;
 import org.bukkit.Server;
 import org.bukkit.World;
 
+import java.lang.reflect.Method;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -14,18 +15,21 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Monitors loaded chunks, chunk load/unload frequency, and new chunk generation rate.
+ * Uses Paper O(1) World#getChunkCount() when available to avoid copying Chunk[] arrays on the main thread.
  * Does not interfere with legitimate chunk loading or unloading.
  */
 public final class ChunkMonitor {
 
     private final Server server;
     private final SchedulerAdapter scheduler;
+    private final Method worldChunkCountMethod;
 
     private final AtomicLong chunkLoadCounter = new AtomicLong(0L);
     private final AtomicLong chunkUnloadCounter = new AtomicLong(0L);
     private final AtomicLong chunkGenCounter = new AtomicLong(0L);
     private final AtomicInteger eventTrackedLoadedChunks = new AtomicInteger(0);
     private final AtomicLong coalescedQueryHits = new AtomicLong(0L);
+    private final AtomicLong fastChunkCountHits = new AtomicLong(0L);
 
     private long lastSampleNanos = 0L;
     private long lastLoadCount = 0L;
@@ -42,6 +46,15 @@ public final class ChunkMonitor {
     public ChunkMonitor(Server server, SchedulerAdapter scheduler) {
         this.server = server;
         this.scheduler = scheduler;
+        this.worldChunkCountMethod = findOptionalChunkCountMethod();
+    }
+
+    private static Method findOptionalChunkCountMethod() {
+        try {
+            return World.class.getMethod("getChunkCount");
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     public void recordChunkLoad(boolean newlyGenerated) {
@@ -90,8 +103,7 @@ public final class ChunkMonitor {
                 if (worlds != null) {
                     for (World world : worlds) {
                         if (world != null) {
-                            Chunk[] chunks = world.getLoadedChunks();
-                            int c = chunks != null ? chunks.length : 0;
+                            int c = readWorldChunkCount(world);
                             totalLoaded += c;
                             perWorld.put(world.getName(), Integer.valueOf(c));
                         }
@@ -125,6 +137,25 @@ public final class ChunkMonitor {
         this.lastLoadCount = curLoads;
         this.lastUnloadCount = curUnloads;
         this.lastGenCount = curGens;
+    }
+
+    private int readWorldChunkCount(World world) {
+        if (worldChunkCountMethod != null) {
+            try {
+                Object raw = worldChunkCountMethod.invoke(world);
+                if (raw instanceof Number) {
+                    fastChunkCountHits.incrementAndGet();
+                    return Math.max(0, ((Number) raw).intValue());
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        Chunk[] chunks = world.getLoadedChunks();
+        return chunks != null ? chunks.length : 0;
+    }
+
+    public long getFastChunkCountHits() {
+        return fastChunkCountHits.get();
     }
 
     public int getLoadedChunks() {

@@ -2,6 +2,35 @@
 
 All notable changes to **OptimizeServer** will be documented in this file.
 
+## [1.2.0] - 2026-11-14
+
+### Added
+- **Zero-Gameplay-Impact Execution & Memory Modules** (expanded from 9 to 13 total modules):
+  - `zero-alloc-world-scanner`: Uses reflective Paper `World#getEntityCount()` and `Chunk#getTileEntities(false)` plus a 0.40 ms incremental chunk scan cursor (`EntityMonitor`).
+  - `low-memory-footprint-governor`: Compacts `MetricHistory` ring capacity and trims diagnostic caches when heap ceiling `<= 1536 MB` or heap/OldGen pressure `>= 78%`, restoring capacity automatically on pressure relief or disable/rollback.
+  - `async-io-offloader`: Moves live report serialization, `/os tune` config audits/preset writes, and `/os reload` activity log appends off the main tick thread.
+  - `adaptive-telemetry-batcher`: Pauses `ThreadMXBean` per-thread allocation queries during MSPT (`>= 40 ms`) or CPU (`>= 85%`) spikes.
+- **Post-GC OldGen Retention Telemetry & Cooldown Alerts:**
+  - `MemoryMonitor` and `MetricSnapshot` track OldGen/Tenured/ZHeap pool occupancy (`getPostGcHeapUsagePercent()`).
+  - `AlertManager` enforces `alerts.*` severity filtering and per-subsystem cooldowns with Folia-safe global dispatch.
+  - `TaskMonitor` separates sync Bukkit tasks (`BukkitTask#isSync()`) and flags monotonic sync task growth streaks (`>= 25` tasks).
+- **Non-Gameplay Config Auditor & Capacity Estimator (`ServerConfigAuditor`):**
+  - Added `/os tune [page]` (`optimizeserver.diagnose`) and `/os capacity` (`optimizeserver.status`) to inspect `server.properties`, `bukkit.yml`, `spigot.yml`, `paper-global.yml`, `paper-world-defaults.yml`, `paper.yml`, JVM flags, and RAM headroom, writing presets to `plugins/OptimizeServer/presets/`.
+  - Enhanced `/os status` with Post-GC OldGen percentage and live Capacity Status (`HEALTHY`, `TIGHT_HEADROOM`, or `INSUFFICIENT_RESOURCES`).
+- **Automated MSPT Regression Safeguard:**
+  - Wired `optimization.auto-rollback-on-regression` into `OptimizationManager` so sustained severe MSPT regressions (`>= 75 ms` and `>= +25 ms` over baseline for 3 consecutive evaluations) automatically roll back conditional tuning and log an audit record in `RollbackManager`.
+- **Config Schema Migration v3 (`ConfigMigrator`):**
+  - Bumped `config-version` to `3` with automatic default population for the new modules and alert settings.
+
+### Changed
+- **Main-Thread Overhead Reduction:**
+  - Added `RollingWindow.computeAverage(long)` (`O(N)`, zero sorting) for `5s`, `30s`, `5m`, and `15m` TPS windows and moved `TickMonitor.refreshAggregates(...)` onto the asynchronous snapshot worker, removing per-second sorting of up to 25,400 elements from the primary tick thread.
+  - Updated `ChunkMonitor` to use O(1) `World#getChunkCount()` reflectively when available instead of cloning `Chunk[]` arrays on every world sample.
+  - Cached legacy `getHandle()` / `ping` reflection lookups in `NetworkMonitor` for MC 1.8.8–1.16.4 servers.
+  - Coalesced `StorageMonitor.sampleAsync()` into the unified async sampler cycle when `task-batch-coordinator` is enabled, eliminating an idle background timer.
+  - Removed high-frequency `PlayerMoveEvent` and `PlayerInteractEvent` handlers from `ServerActivityListener` and deactivated listener event capture cleanly in `OptimizeServer.onDisable()`.
+  - Updated `RecommendationEngine` to tailor JVM flags by heap tier (low-RAM `<= 1536 MB` G1GC vs Aikar G1GC vs `>= 14 GB` Java 21+ Generational ZGC) and passed dynamic plugin version to `DependencyAutoInstaller` User-Agent headers.
+
 ## [1.0.0] - 2026-11-10
 
 ### Added

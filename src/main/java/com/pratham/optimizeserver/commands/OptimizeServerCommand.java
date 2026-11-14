@@ -4,6 +4,7 @@ import com.pratham.optimizeserver.analyzer.BottleneckCategory;
 import com.pratham.optimizeserver.analyzer.DiagnosticCoordinator;
 import com.pratham.optimizeserver.analyzer.DiagnosticFinding;
 import com.pratham.optimizeserver.analyzer.RecommendationEngine;
+import com.pratham.optimizeserver.analyzer.ServerConfigAuditor;
 import com.pratham.optimizeserver.compatibility.CompatibilityReport;
 import com.pratham.optimizeserver.core.PerformanceEngine;
 import com.pratham.optimizeserver.metrics.MetricSnapshot;
@@ -16,6 +17,7 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
 
 import java.io.File;
+import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -33,7 +35,7 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
 
     private static final List<String> ROOT_SUBCOMMANDS = Arrays.asList(
             "help", "version", "status", "tps", "mspt", "cpu", "memory", "network",
-            "chunks", "entities", "diagnose", "profile", "health", "optimize", "report", "reload"
+            "chunks", "entities", "diagnose", "profile", "health", "optimize", "tune", "capacity", "report", "reload"
     );
 
     private static final List<String> DIAGNOSE_SUBCOMMANDS = Arrays.asList(
@@ -61,7 +63,7 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
 
     public OptimizeServerCommand(PerformanceEngine engine, String pluginVersion) {
         this.engine = engine;
-        this.pluginVersion = pluginVersion != null ? pluginVersion : "1.0.0";
+        this.pluginVersion = pluginVersion != null ? pluginVersion : "1.2.0";
     }
 
     @Override
@@ -155,6 +157,16 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
             handleOptimize(sender, args);
             return true;
         }
+        if ("tune".equals(sub)) {
+            if (!requirePermission(sender, CommandPermissions.DIAGNOSE)) return true;
+            handleTune(sender, args);
+            return true;
+        }
+        if ("capacity".equals(sub)) {
+            if (!requirePermission(sender, CommandPermissions.STATUS)) return true;
+            handleCapacity(sender);
+            return true;
+        }
         if ("report".equals(sub)) {
             if (!requirePermission(sender, CommandPermissions.REPORT)) return true;
             handleReport(sender, args);
@@ -195,6 +207,8 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
                 ChatColor.YELLOW + "/os profile <start|stop|status|memory>" + ChatColor.GRAY + " - Spark profiler control",
                 ChatColor.YELLOW + "/os health" + ChatColor.GRAY + " - Comprehensive server and Spark health overview",
                 ChatColor.YELLOW + "/os optimize [status|list|enable|disable|rollback]" + ChatColor.GRAY + " - Hybrid optimization control",
+                ChatColor.YELLOW + "/os tune [page]" + ChatColor.GRAY + " - Audit server configs & generate non-gameplay-altering presets",
+                ChatColor.YELLOW + "/os capacity" + ChatColor.GRAY + " - Inspect RAM/OldGen headroom and safe player capacity",
                 ChatColor.YELLOW + "/os report <generate|history>" + ChatColor.GRAY + " - Generate or list local diagnostic reports",
                 ChatColor.YELLOW + "/os reload" + ChatColor.GRAY + " - Reload and re-validate config.yml"
         );
@@ -231,16 +245,22 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
                         + ChatColor.GRAY + " | MSPT (Avg/P95/P99): " + ChatColor.WHITE + "%.2f / %.2f / %.2f ms",
                 s.getTps5s(), s.getTps1m(), s.getTps15m(),
                 s.getAverageMspt(), s.getP95Mspt(), s.getP99Mspt()));
+        ServerConfigAuditor.CapacityAssessment cap = engine.evaluateCapacity();
+        String oldGenSuffix = s.getPostGcHeapMaxBytes() > 0L
+                ? String.format(Locale.ROOT, " | Post-GC OldGen: %.1f%%", s.getPostGcHeapUsagePercent())
+                : "";
         sender.sendMessage(String.format(Locale.ROOT,
                 ChatColor.GRAY + "CPU (Proc/Sys): " + ChatColor.WHITE + "%.1f%% / %.1f%% (%d cores)"
-                        + ChatColor.GRAY + " | Heap: " + ChatColor.WHITE + "%d / %d MB (%.1f%%)",
+                        + ChatColor.GRAY + " | Heap: " + ChatColor.WHITE + "%d / %d MB (%.1f%%)%s",
                 s.getProcessCpuLoadPercent(), s.getSystemCpuLoadPercent(), s.getAvailableProcessors(),
-                s.getHeapUsedBytes() / (1024L * 1024L), s.getHeapMaxBytes() / (1024L * 1024L), s.getHeapUsagePercent()));
+                s.getHeapUsedBytes() / (1024L * 1024L), s.getHeapMaxBytes() / (1024L * 1024L),
+                s.getHeapUsagePercent(), oldGenSuffix));
         sender.sendMessage(String.format(Locale.ROOT,
                 ChatColor.GRAY + "World: " + ChatColor.WHITE + "%d chunks, %d entities (%d tiles), %d players"
-                        + ChatColor.GRAY + " | Optimizations: " + ChatColor.GREEN + "%d/%d active",
+                        + ChatColor.GRAY + " | Optimizations: " + ChatColor.GREEN + "%d/%d active"
+                        + ChatColor.GRAY + " | Capacity: " + ChatColor.WHITE + "%s",
                 s.getLoadedChunks(), s.getTotalEntities(), s.getTileEntityCount(),
-                s.getOnlinePlayers(), activeMods, totalMods));
+                s.getOnlinePlayers(), activeMods, totalMods, cap.getStatus().name()));
     }
 
     private void handleTps(CommandSender sender) {
@@ -554,13 +574,109 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
         sender.sendMessage(ChatColor.RED + "Usage: /os optimize <status|list|enable <id>|disable <id>|rollback <id>>");
     }
 
-    private void handleReport(CommandSender sender, String[] args) {
+    private void handleTune(final CommandSender sender, String[] args) {
+        final int page = args.length >= 2 ? parsePage(args[1], 1) : 1;
+        if (engine.shouldOffloadAsyncIo()) {
+            sender.sendMessage(ChatColor.GRAY + "[OptimizeServer] Auditing server configurations asynchronously...");
+            engine.getScheduler().runAsync(new Runnable() {
+                @Override
+                public void run() {
+                    final ServerConfigAuditor.AuditReport audit = engine.auditServerConfig();
+                    File presetFile = null;
+                    String presetError = null;
+                    try {
+                        presetFile = engine.writeTunePresets(audit);
+                    } catch (IOException ex) {
+                        presetError = ex.getMessage();
+                    }
+                    final File savedPreset = presetFile;
+                    final String err = presetError;
+                    engine.getScheduler().runGlobal(new Runnable() {
+                        @Override
+                        public void run() {
+                            sendTuneOutput(sender, audit, savedPreset, err, page);
+                        }
+                    });
+                }
+            });
+            return;
+        }
+        ServerConfigAuditor.AuditReport audit = engine.auditServerConfig();
+        File presetFile = null;
+        String presetError = null;
+        try {
+            presetFile = engine.writeTunePresets(audit);
+        } catch (IOException ex) {
+            presetError = ex.getMessage();
+        }
+        sendTuneOutput(sender, audit, presetFile, presetError, page);
+    }
+
+    private void sendTuneOutput(CommandSender sender,
+                                ServerConfigAuditor.AuditReport audit,
+                                File presetFile,
+                                String presetError,
+                                int page) {
+        List<String> lines = new ArrayList<String>();
+        for (ServerConfigAuditor.TuningSuggestion s : audit.getSuggestions()) {
+            lines.add(ChatColor.YELLOW + "[" + s.getFile() + "] " + ChatColor.WHITE + s.getKey()
+                    + ChatColor.GRAY + " (" + s.getCurrentValue() + " -> " + ChatColor.GREEN + s.getRecommendedValue() + ChatColor.GRAY + ")");
+            lines.add(ChatColor.GRAY + "  Why: " + s.getReason());
+        }
+        if (lines.isEmpty()) {
+            lines.add(ChatColor.GREEN + "All audited zero-gameplay-impact settings already look well tuned.");
+        }
+        CommandPagination.sendPaginated(sender, "Zero-Gameplay-Impact Config Audit", lines, page, 8, "/os tune");
+        sender.sendMessage(ChatColor.GRAY + "Recommended JVM Flags: " + ChatColor.AQUA + audit.getRecommendedJvmCommand());
+        if (presetFile != null) {
+            sender.sendMessage(ChatColor.GRAY + "Saved safe preset sheet to: " + ChatColor.YELLOW + presetFile.getPath());
+        } else if (presetError != null) {
+            sender.sendMessage(ChatColor.RED + "Failed to write preset file: " + presetError);
+        }
+    }
+
+    private void handleCapacity(CommandSender sender) {
+        ServerConfigAuditor.CapacityAssessment cap = engine.evaluateCapacity();
+        ChatColor statusColor = cap.getStatus() == ServerConfigAuditor.CapacityStatus.HEALTHY
+                ? ChatColor.GREEN
+                : (cap.getStatus() == ServerConfigAuditor.CapacityStatus.TIGHT_HEADROOM ? ChatColor.YELLOW : ChatColor.RED);
+        sender.sendMessage(ChatColor.DARK_AQUA + "=== " + ChatColor.AQUA + "Server Capacity & Headroom Assessment" + ChatColor.DARK_AQUA + " ===");
+        sender.sendMessage(ChatColor.GRAY + "Capacity Status: " + statusColor + cap.getStatus().name());
+        sender.sendMessage(ChatColor.GRAY + "Heap: " + ChatColor.WHITE + cap.getHeapUsedMb() + " MB used / " + cap.getHeapMaxMb() + " MB max"
+                + ChatColor.GRAY + " | Post-GC OldGen: " + ChatColor.WHITE + cap.getPostGcOldGenUsedMb() + " MB / " + cap.getPostGcOldGenMaxMb() + " MB"
+                + ChatColor.GRAY + " | Headroom: " + ChatColor.WHITE + cap.getHeadroomMb() + " MB");
+        sender.sendMessage(ChatColor.GRAY + "Players: " + ChatColor.WHITE + cap.getOnlinePlayers() + " online / " + cap.getConfiguredMaxPlayers() + " max-players"
+                + ChatColor.GRAY + " | Estimated Safe Player Capacity: " + statusColor + cap.getEstimatedSafePlayers());
+        sender.sendMessage(String.format(Locale.ROOT,
+                ChatColor.GRAY + "CPU Cores: " + ChatColor.WHITE + "%d" + ChatColor.GRAY + " | Loaded Chunks/Player: " + ChatColor.WHITE + "%.1f",
+                cap.getAvailableCores(), cap.getLoadedChunksPerPlayer()));
+        sender.sendMessage(ChatColor.GRAY + "Assessment: " + ChatColor.WHITE + cap.getSummary());
+    }
+
+    private void handleReport(final CommandSender sender, String[] args) {
         String action = args.length >= 2 ? args[1].toLowerCase(Locale.ROOT) : "generate";
         if ("generate".equals(action)) {
-            DiagnosticReport report = engine.generateReport();
-            sender.sendMessage(ChatColor.GREEN + "[OptimizeServer] Generated diagnostic report: "
-                    + ChatColor.WHITE + report.getReportId());
-            sender.sendMessage(ChatColor.GRAY + "Saved to: " + ChatColor.YELLOW + report.getSavedFile().getPath());
+            if (engine.shouldOffloadAsyncIo()) {
+                final DiagnosticReport queued = engine.generateReportAsyncAware(new Runnable() {
+                    @Override
+                    public void run() {
+                        engine.getScheduler().runGlobal(new Runnable() {
+                            @Override
+                            public void run() {
+                                sender.sendMessage(ChatColor.GREEN + "[OptimizeServer] Async diagnostic report write completed.");
+                            }
+                        });
+                    }
+                });
+                sender.sendMessage(ChatColor.GREEN + "[OptimizeServer] Generated diagnostic report: "
+                        + ChatColor.WHITE + queued.getReportId());
+                sender.sendMessage(ChatColor.GRAY + "Saving asynchronously to: " + ChatColor.YELLOW + queued.getSavedFile().getPath());
+            } else {
+                DiagnosticReport report = engine.generateReport();
+                sender.sendMessage(ChatColor.GREEN + "[OptimizeServer] Generated diagnostic report: "
+                        + ChatColor.WHITE + report.getReportId());
+                sender.sendMessage(ChatColor.GRAY + "Saved to: " + ChatColor.YELLOW + report.getSavedFile().getPath());
+            }
             return;
         }
         if ("history".equals(action)) {

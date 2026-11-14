@@ -10,7 +10,7 @@
 # - Zero intentional gameplay modifications
 # ==============================================================================
 
-config-version: 2
+config-version: 3
 
 general:
   enabled: true
@@ -120,6 +120,14 @@ optimization:
       enabled: true
       dedup-window-seconds: 30
     task-batch-coordinator:
+      enabled: true
+    zero-alloc-world-scanner:
+      enabled: true
+    low-memory-footprint-governor:
+      enabled: true
+      compact-history-capacity: 90
+      compact-findings-history: 40
+    async-io-offloader:
       enabled: true
     # Conditional Optimizations (Validated internal adaptive adjustments)
     adaptive-monitoring-sampler:

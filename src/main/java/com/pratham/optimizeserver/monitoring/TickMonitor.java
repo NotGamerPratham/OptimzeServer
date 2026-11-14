@@ -96,26 +96,28 @@ public final class TickMonitor {
      * Recomputes rolling window statistics for 5s, 30s, 1m, 5m, and 15m windows.
      */
     public void refreshAggregates(long nowNanos) {
-        RollingWindow.WindowStats stats5s = metricRegistry.getMspt5s().computeStats(nowNanos);
-        if (stats5s.getSampleCount() == 0 && (hasPaperTickTimes || hasPaperMspt)) {
+        RollingWindow.WindowAverage avg5s = metricRegistry.getMspt5s().computeAverage(nowNanos);
+        if (avg5s.getSampleCount() == 0 && (hasPaperTickTimes || hasPaperMspt)) {
             double seededMspt = readNativeTickDurationMs(-1.0);
             if (seededMspt > 0.0) {
                 metricRegistry.recordTickDurationMs(seededMspt, nowNanos);
-                stats5s = metricRegistry.getMspt5s().computeStats(nowNanos);
+                avg5s = metricRegistry.getMspt5s().computeAverage(nowNanos);
             }
         }
-        RollingWindow.WindowStats stats30s = metricRegistry.getMspt30s().computeStats(nowNanos);
+        RollingWindow.WindowAverage avg30s = metricRegistry.getMspt30s().computeAverage(nowNanos);
         RollingWindow.WindowStats stats1m = metricRegistry.getMspt1m().computeStats(nowNanos);
-        RollingWindow.WindowStats stats5m = metricRegistry.getMspt5m().computeStats(nowNanos);
-        RollingWindow.WindowStats stats15m = metricRegistry.getMspt15m().computeStats(nowNanos);
+        RollingWindow.WindowAverage avg5m = metricRegistry.getMspt5m().computeAverage(nowNanos);
+        RollingWindow.WindowAverage avg15m = metricRegistry.getMspt15m().computeAverage(nowNanos);
 
-        this.latestMsptStats = stats1m.getSampleCount() > 0 ? stats1m : stats5s;
+        this.latestMsptStats = stats1m.getSampleCount() > 0
+                ? stats1m
+                : metricRegistry.getMspt5s().computeStats(nowNanos);
 
-        this.latestTps5s = msptToTps(stats5s);
-        this.latestTps30s = msptToTps(stats30s);
+        this.latestTps5s = msptToTps(avg5s.getSampleCount(), avg5s.getAverage());
+        this.latestTps30s = msptToTps(avg30s.getSampleCount(), avg30s.getAverage());
         this.latestTps1m = msptToTps(stats1m);
-        this.latestTps5m = msptToTps(stats5m);
-        this.latestTps15m = msptToTps(stats15m);
+        this.latestTps5m = msptToTps(avg5m.getSampleCount(), avg5m.getAverage());
+        this.latestTps15m = msptToTps(avg15m.getSampleCount(), avg15m.getAverage());
 
         // Cross-check 1m, 5m, 15m with native Paper TPS array if available and rolling window is still warming up
         if (getTpsMethod != null && server != null) {
@@ -127,10 +129,10 @@ public final class TickMonitor {
                         if (stats1m.getSampleCount() < 100) {
                             this.latestTps1m = clampTps(nativeTps[0]);
                         }
-                        if (stats5m.getSampleCount() < 300) {
+                        if (avg5m.getSampleCount() < 300) {
                             this.latestTps5m = clampTps(nativeTps[1]);
                         }
-                        if (stats15m.getSampleCount() < 600) {
+                        if (avg15m.getSampleCount() < 600) {
                             this.latestTps15m = clampTps(nativeTps[2]);
                         }
                     }
@@ -180,11 +182,14 @@ public final class TickMonitor {
     }
 
     private static double msptToTps(RollingWindow.WindowStats stats) {
-        if (stats == null || stats.getSampleCount() == 0) {
+        if (stats == null) {
             return 20.0;
         }
-        double avgMspt = stats.getAverage();
-        if (avgMspt <= 50.0) {
+        return msptToTps(stats.getSampleCount(), stats.getAverage());
+    }
+
+    private static double msptToTps(int sampleCount, double avgMspt) {
+        if (sampleCount == 0 || avgMspt <= 50.0) {
             return 20.0;
         }
         return clampTps(1000.0 / avgMspt);

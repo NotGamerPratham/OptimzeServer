@@ -35,6 +35,7 @@ public final class ReportGenerator {
     private final File baseDataFolder;
     private final ConfigManager configManager;
     private final List<DiagnosticReport> recentReports = new CopyOnWriteArrayList<DiagnosticReport>();
+    private final Object ioLock = new Object();
 
     public ReportGenerator(File baseDataFolder, ConfigManager configManager) {
         this.baseDataFolder = baseDataFolder != null ? baseDataFolder : new File(".");
@@ -55,6 +56,19 @@ public final class ReportGenerator {
                                             DiagnosticCoordinator.DiagnosticEvaluation evaluation,
                                             Collection<OptimizationModule> modules,
                                             SafeModeController safeModeController) {
+        DiagnosticReport report = buildReport(compatibility, snapshot, evaluation, modules, safeModeController);
+        saveReportToDisk(report);
+        return report;
+    }
+
+    /**
+     * Builds a diagnostic report completely in memory without performing blocking disk I/O.
+     */
+    public DiagnosticReport buildReport(CompatibilityReport compatibility,
+                                        MetricSnapshot snapshot,
+                                        DiagnosticCoordinator.DiagnosticEvaluation evaluation,
+                                        Collection<OptimizationModule> modules,
+                                        SafeModeController safeModeController) {
         long now = System.currentTimeMillis();
         SimpleDateFormat fileFmt = new SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.ROOT);
         SimpleDateFormat humanFmt = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss z", Locale.ROOT);
@@ -118,6 +132,13 @@ public final class ReportGenerator {
             lines.add(String.format(Locale.ROOT,
                     "  Heap Memory                   : %d MB used / %d MB max (%.1f%%) | Committed: %d MB | Non-Heap: %d MB",
                     usedMb, maxMb, snapshot.getHeapUsagePercent(), commMb, nonHeapMb));
+            if (snapshot.getPostGcHeapMaxBytes() > 0L) {
+                long postUsedMb = snapshot.getPostGcHeapUsedBytes() / (1024L * 1024L);
+                long postMaxMb = snapshot.getPostGcHeapMaxBytes() / (1024L * 1024L);
+                lines.add(String.format(Locale.ROOT,
+                        "  Post-GC OldGen Retention      : %d MB used / %d MB max (%.1f%%)",
+                        postUsedMb, postMaxMb, snapshot.getPostGcHeapUsagePercent()));
+            }
             lines.add(String.format(Locale.ROOT,
                     "  Garbage Collection            : %d collections | %d ms cumulative | %.2f ms/s recent pause rate",
                     snapshot.getGcTotalCount(), snapshot.getGcTotalTimeMs(), snapshot.getRecentGcPauseRateMsPerSec()));
@@ -196,16 +217,29 @@ public final class ReportGenerator {
 
         File reportsDir = getReportsDirectory();
         File reportFile = new File(reportsDir, reportId + ".txt");
-        writeLinesToFile(reportFile, lines);
-        appendToRotatingActivityLog("Generated diagnostic report " + reportId + " -> " + reportFile.getName());
-        enforceRetentionPolicy(reportsDir);
+        return new DiagnosticReport(reportId, now, reportFile, lines);
+    }
 
-        DiagnosticReport report = new DiagnosticReport(reportId, now, reportFile, lines);
+    /**
+     * Persists a built report to disk, updates the activity log, and enforces report retention.
+     * Safe to invoke from an asynchronous worker thread.
+     */
+    public void saveReportToDisk(DiagnosticReport report) {
+        if (report == null) {
+            return;
+        }
+        synchronized (ioLock) {
+            File reportsDir = getReportsDirectory();
+            File reportFile = report.getSavedFile();
+            writeLinesToFile(reportFile, report.getLines());
+            appendToRotatingActivityLog("Generated diagnostic report " + report.getReportId()
+                    + " -> " + reportFile.getName());
+            enforceRetentionPolicy(reportsDir);
+        }
         recentReports.add(report);
         while (recentReports.size() > 50) {
             recentReports.remove(0);
         }
-        return report;
     }
 
     public void appendToRotatingActivityLog(String entry) {
@@ -216,22 +250,24 @@ public final class ReportGenerator {
         int maxArchives = configManager != null ? configManager.getInt("general.log-rotation.max-archives", 10) : 10;
 
         File logFile = new File(baseDataFolder, "optimizeserver-activity.log");
-        try {
-            if (!baseDataFolder.exists()) {
-                baseDataFolder.mkdirs();
-            }
-            if (logFile.exists() && logFile.length() >= (maxKb * 1024L)) {
-                rotateLogFile(logFile, Math.max(1, maxArchives));
-            }
-            BufferedWriter writer = new BufferedWriter(
-                    new OutputStreamWriter(new FileOutputStream(logFile, true), StandardCharsets.UTF_8));
+        synchronized (ioLock) {
             try {
-                writer.write("[" + new Date() + "] " + entry);
-                writer.newLine();
-            } finally {
-                writer.close();
+                if (!baseDataFolder.exists()) {
+                    baseDataFolder.mkdirs();
+                }
+                if (logFile.exists() && logFile.length() >= (maxKb * 1024L)) {
+                    rotateLogFile(logFile, Math.max(1, maxArchives));
+                }
+                BufferedWriter writer = new BufferedWriter(
+                        new OutputStreamWriter(new FileOutputStream(logFile, true), StandardCharsets.UTF_8));
+                try {
+                    writer.write("[" + new Date() + "] " + entry);
+                    writer.newLine();
+                } finally {
+                    writer.close();
+                }
+            } catch (IOException ignored) {
             }
-        } catch (IOException ignored) {
         }
     }
 

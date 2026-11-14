@@ -90,7 +90,9 @@ All three platforms ship the identical universal `OptimizeServer.jar` (Java 8+ b
 | `/os diagnose [full\|cpu\|memory\|chunks\|entities\|plugins]` | `optimizeserver.diagnose` | Evidence-backed bottleneck classification & recommendations |
 | `/os profile <start\|stop\|status\|memory>` | `optimizeserver.profile` | Spark profiler session control and memory diagnostics |
 | `/os health` | `optimizeserver.profile` | Combined server and Spark health report |
-| `/os optimize [status\|list\|enable\|disable\|rollback]` | `optimizeserver.optimize` | Manage and rollback internal optimization modules |
+| `/os optimize [status\|list\|enable\|disable\|rollback]` | `optimizeserver.optimize` | Manage and rollback the 13 internal optimization modules |
+| `/os tune [page]` | `optimizeserver.diagnose` | Audit `server.properties`, `bukkit.yml`, `spigot.yml`, Paper configs, and JVM flags without altering vanilla gameplay; saves presets under `plugins/OptimizeServer/presets/` |
+| `/os capacity` | `optimizeserver.status` | Inspect heap/OldGen headroom and estimated safe vanilla player capacity |
 | `/os report <generate\|history>` | `optimizeserver.report` | Generate and view saved local diagnostic reports |
 | `/os reload` | `optimizeserver.reload` | Reload and re-validate `config.yml` |
 
@@ -124,7 +126,7 @@ mvn clean test package -Pmodern-java21
 
 `pom.xml` is pre-configured with `<artifactId>optimizeserver</artifactId>` (lowercase as required by GitHub Packages) and `<distributionManagement>` pointing to `https://maven.pkg.github.com/notgamerpratham/optimzeserver`.
 
-- **Automated Publishing (GitHub Actions):** Pushing to `main` or creating a release runs [`.github/workflows/maven-publish.yml`](.github/workflows/maven-publish.yml), which executes all JUnit tests, uploads `OptimizeServer.jar`, and publishes `com.pratham:optimizeserver:1.0.0` to GitHub Packages using `GITHUB_TOKEN`.
+- **Automated Publishing (GitHub Actions):** Pushing to `main` or creating a release runs [`.github/workflows/maven-publish.yml`](.github/workflows/maven-publish.yml), which executes all JUnit tests, uploads `OptimizeServer.jar`, and publishes `com.pratham:optimizeserver:1.2.0` to GitHub Packages using `GITHUB_TOKEN`.
 - **Local Publishing (`mvn deploy`):** Configure `~/.m2/settings.xml` with server `<id>github</id>`, your GitHub username, and a classic Personal Access Token (`write:packages`, `read:packages`), then run:
 
   ```bash
@@ -137,7 +139,7 @@ mvn clean test package -Pmodern-java21
   <dependency>
       <groupId>com.pratham</groupId>
       <artifactId>optimizeserver</artifactId>
-      <version>1.0.0</version>
+      <version>1.2.0</version>
       <scope>provided</scope>
   </dependency>
   ```
@@ -148,8 +150,8 @@ mvn clean test package -Pmodern-java21
 2. Tag and push:
 
    ```bash
-   git tag v1.0.1
-   git push origin v1.0.1
+   git tag v1.2.0
+   git push origin v1.2.0
    ```
 
 3. [`.github/workflows/release.yml`](.github/workflows/release.yml) then builds and tests the JAR and:
@@ -173,4 +175,5 @@ mvn clean test package -Pmodern-java21
 1. **Physical Network Latency (RTT):** A server plugin cannot reduce physical internet round-trip time between a player and the host. `NetworkMonitor` separates physical player RTT from server-side tick-overrun and packet processing overhead.
 2. **Per-Plugin CPU Attribution:** Exact per-plugin CPU time requires stack sampling via Spark (`/os profile start`). Without an active profiler, `TaskMonitor` reports scheduled task and worker volumes per plugin without falsely claiming exact CPU share.
 3. **Folia World Enumeration:** Because Folia enforces strict regionalized thread ownership, `ChunkMonitor` and `EntityMonitor` automatically switch to event-driven counters on Folia rather than iterating `World#getLoadedChunks()` or `World#getEntities()` from the global thread.
-4. **Extended 24–72 Hour Soak Testing:** Automated unit, lifecycle, memory-bounds, and micro-benchmark tests execute during the build; full 24–72 hour live production soak testing must be performed on the target host environment prior to large-scale deployment.
+4. **Physical Hardware & RAM Ceilings Under Vanilla Gameplay:** Because OptimizeServer strictly preserves all 16 vanilla gameplay invariants (never deleting entities, crippling mob AI, shrinking view/simulation distance, or skipping ticks), a plugin alone cannot force 20/20/20 TPS when vanilla workload exceeds physical host RAM or CPU (for example, 50 concurrent players on a 1 GB modern Minecraft server). Use `/os capacity` and `/os tune` to inspect real OldGen headroom and apply zero-gameplay-impact server/JVM tuning.
+5. **Extended 24–72 Hour Soak Testing:** Automated unit, lifecycle, memory-bounds, and micro-benchmark tests execute during the build; full 24–72 hour live production soak testing must be performed on the target host environment prior to large-scale deployment.

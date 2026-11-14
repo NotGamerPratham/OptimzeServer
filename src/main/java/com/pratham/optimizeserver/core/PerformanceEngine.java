@@ -1,6 +1,8 @@
 package com.pratham.optimizeserver.core;
 
+import com.pratham.optimizeserver.analyzer.AlertManager;
 import com.pratham.optimizeserver.analyzer.DiagnosticCoordinator;
+import com.pratham.optimizeserver.analyzer.ServerConfigAuditor;
 import com.pratham.optimizeserver.compatibility.CompatibilityManager;
 import com.pratham.optimizeserver.compatibility.CompatibilityReport;
 import com.pratham.optimizeserver.config.ConfigManager;
@@ -35,6 +37,7 @@ import org.bukkit.Server;
 import org.bukkit.plugin.Plugin;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Logger;
 
@@ -67,6 +70,8 @@ public final class PerformanceEngine implements EngineLifecycle {
     private StorageMonitor storageMonitor;
 
     private DiagnosticCoordinator diagnosticCoordinator;
+    private AlertManager alertManager;
+    private ServerConfigAuditor serverConfigAuditor;
     private OptimizationManager optimizationManager;
     private SparkIntegration sparkIntegration;
     private ChunkyIntegration chunkyIntegration;
@@ -77,6 +82,7 @@ public final class PerformanceEngine implements EngineLifecycle {
     private TaskHandle systemSamplerHandle;
     private TaskHandle asyncBackgroundHandle;
     private final AtomicLong tickCounter = new AtomicLong(0L);
+    private final AtomicLong lastStorageSampleMillis = new AtomicLong(0L);
 
     private volatile EngineState state = EngineState.UNINITIALIZED;
 
@@ -147,6 +153,8 @@ public final class PerformanceEngine implements EngineLifecycle {
         this.storageMonitor = new StorageMonitor(dataFolder);
 
         this.diagnosticCoordinator = new DiagnosticCoordinator();
+        this.alertManager = new AlertManager(server, scheduler, configManager, logger);
+        this.serverConfigAuditor = new ServerConfigAuditor();
 
         OptimizationRegistry optRegistry = new OptimizationRegistry();
         OptimizationValidator optValidator = new OptimizationValidator(safetyValidator, compatibilityGuard, safeModeController);
@@ -159,6 +167,7 @@ public final class PerformanceEngine implements EngineLifecycle {
                 metricRegistry,
                 chunkMonitor,
                 entityMonitor,
+                memoryMonitor,
                 diagnosticCoordinator,
                 workerPool,
                 logger
@@ -169,6 +178,7 @@ public final class PerformanceEngine implements EngineLifecycle {
         this.chunkyIntegration = new ChunkyIntegration(server, configManager);
 
         File pluginsDir = dataFolder.getParentFile() != null ? dataFolder.getParentFile() : new File(dataFolder, "plugins");
+        String pluginVer = resolvePluginVersion();
         this.dependencyAutoInstaller = new DependencyAutoInstaller(
                 server,
                 pluginsDir,
@@ -177,7 +187,8 @@ public final class PerformanceEngine implements EngineLifecycle {
                 scheduler,
                 sparkIntegration,
                 chunkyIntegration,
-                logger
+                logger,
+                pluginVer
         );
         if (plugin != null) {
             this.dependencyAutoInstaller.checkAndInstallMissingAsync();
@@ -233,31 +244,63 @@ public final class PerformanceEngine implements EngineLifecycle {
             @Override
             public void run() {
                 long nowNanos = System.nanoTime();
-                tickMonitor.refreshAggregates(nowNanos);
                 networkMonitor.sampleMainThread(nowNanos);
                 taskMonitor.sample();
 
-                // Assemble and publish immutable MetricSnapshot asynchronously
+                // Assemble and publish immutable MetricSnapshot and rolling aggregates asynchronously
                 scheduler.runAsync(new Runnable() {
                     @Override
                     public void run() {
                         long asyncNanos = System.nanoTime();
+                        tickMonitor.refreshAggregates(asyncNanos);
                         cpuMonitor.sample(asyncNanos);
                         memoryMonitor.sample(asyncNanos);
+                        if (optimizationManager.isTaskBatchingEnabled()) {
+                            long nowMs = System.currentTimeMillis();
+                            long lastMs = lastStorageSampleMillis.get();
+                            if ((nowMs - lastMs) >= bgIntervalMs
+                                    && lastStorageSampleMillis.compareAndSet(lastMs, nowMs)) {
+                                storageMonitor.sampleAsync();
+                            }
+                        }
                         MetricSnapshot snap = buildSnapshot(asyncNanos);
                         metricRegistry.getHistory().append(snap);
                         optimizationManager.evaluateConditionalModules(snap);
+                        if (alertManager != null && (snap.getAverageMspt() >= 30.0
+                                || snap.getHeapUsagePercent() >= 70.0
+                                || snap.getPostGcHeapUsagePercent() >= 70.0
+                                || snap.getProcessCpuLoadPercent() >= 75.0
+                                || snap.getRecentGcPauseRateMsPerSec() >= 40.0)) {
+                            DiagnosticCoordinator.DiagnosticEvaluation eval = runDiagnostics(true);
+                            if (eval != null) {
+                                alertManager.processFindings(eval.getFindings());
+                            }
+                        }
                     }
                 });
             }
         }, sysInterval, sysInterval);
 
-        this.asyncBackgroundHandle = scheduler.runAsyncTimer(new Runnable() {
-            @Override
-            public void run() {
-                storageMonitor.sampleAsync();
+        if (!optimizationManager.isTaskBatchingEnabled()) {
+            this.asyncBackgroundHandle = scheduler.runAsyncTimer(new Runnable() {
+                @Override
+                public void run() {
+                    storageMonitor.sampleAsync();
+                }
+            }, 500L, bgIntervalMs);
+        }
+    }
+
+    private String resolvePluginVersion() {
+        if (plugin != null) {
+            try {
+                if (plugin.getDescription() != null && plugin.getDescription().getVersion() != null) {
+                    return plugin.getDescription().getVersion();
+                }
+            } catch (Throwable ignored) {
             }
-        }, 500L, bgIntervalMs);
+        }
+        return "1.2.0";
     }
 
     /**
@@ -300,6 +343,8 @@ public final class PerformanceEngine implements EngineLifecycle {
                 .heapUsedBytes(memoryMonitor.getHeapUsedBytes())
                 .heapCommittedBytes(memoryMonitor.getHeapCommittedBytes())
                 .heapMaxBytes(memoryMonitor.getHeapMaxBytes())
+                .postGcHeapUsedBytes(memoryMonitor.getPostGcHeapUsedBytes())
+                .postGcHeapMaxBytes(memoryMonitor.getPostGcHeapMaxBytes())
                 .nonHeapUsedBytes(memoryMonitor.getNonHeapUsedBytes())
                 .gcTotalCount(memoryMonitor.getGcTotalCount())
                 .gcTotalTimeMs(memoryMonitor.getGcTotalTimeMs())
@@ -344,8 +389,21 @@ public final class PerformanceEngine implements EngineLifecycle {
         if (chunkyIntegration != null) {
             chunkyIntegration.detect();
         }
+        if (alertManager != null) {
+            alertManager.clearCooldowns();
+        }
         if (reportGenerator != null) {
-            reportGenerator.appendToRotatingActivityLog("Reloaded OptimizeServer configuration and re-validated modules.");
+            final String logMsg = "Reloaded OptimizeServer configuration and re-validated modules.";
+            if (shouldOffloadAsyncIo()) {
+                scheduler.runAsync(new Runnable() {
+                    @Override
+                    public void run() {
+                        reportGenerator.appendToRotatingActivityLog(logMsg);
+                    }
+                });
+            } else {
+                reportGenerator.appendToRotatingActivityLog(logMsg);
+            }
         }
     }
 
@@ -400,6 +458,94 @@ public final class PerformanceEngine implements EngineLifecycle {
         );
     }
 
+    /**
+     * Generates a report in memory and offloads file persistence to an async worker on live servers
+     * when the async-io-offloader module is active, or writes synchronously during headless tests.
+     */
+    public DiagnosticReport generateReportAsyncAware(final Runnable afterSaveCallback) {
+        MetricSnapshot snap = getLatestSnapshot();
+        DiagnosticCoordinator.DiagnosticEvaluation eval = runDiagnostics(false);
+        final DiagnosticReport report = reportGenerator.buildReport(
+                compatibilityManager.getReport(),
+                snap,
+                eval,
+                optimizationManager.getAllModules(),
+                safeModeController
+        );
+        if (shouldOffloadAsyncIo()) {
+            scheduler.runAsync(new Runnable() {
+                @Override
+                public void run() {
+                    reportGenerator.saveReportToDisk(report);
+                    if (afterSaveCallback != null) {
+                        afterSaveCallback.run();
+                    }
+                }
+            });
+        } else {
+            reportGenerator.saveReportToDisk(report);
+            if (afterSaveCallback != null) {
+                afterSaveCallback.run();
+            }
+        }
+        return report;
+    }
+
+    public boolean shouldOffloadAsyncIo() {
+        return plugin != null
+                && scheduler != null
+                && optimizationManager != null
+                && optimizationManager.isAsyncIoOffloadEnabled();
+    }
+
+    public File resolveServerRoot() {
+        if (server != null) {
+            try {
+                File worldContainer = server.getWorldContainer();
+                if (worldContainer != null) {
+                    return worldContainer;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        if (dataFolder != null && dataFolder.getParentFile() != null) {
+            File parent = dataFolder.getParentFile();
+            if ("plugins".equalsIgnoreCase(parent.getName()) && parent.getParentFile() != null) {
+                return parent.getParentFile();
+            }
+            return parent;
+        }
+        return dataFolder != null ? dataFolder : new File(".");
+    }
+
+    public ServerConfigAuditor.AuditReport auditServerConfig() {
+        return serverConfigAuditor.audit(
+                resolveServerRoot(),
+                server,
+                compatibilityManager.getReport(),
+                getLatestSnapshot()
+        );
+    }
+
+    public ServerConfigAuditor.CapacityAssessment evaluateCapacity() {
+        int maxPlayers = 0;
+        if (server != null) {
+            try {
+                maxPlayers = server.getMaxPlayers();
+            } catch (Throwable ignored) {
+            }
+        }
+        return serverConfigAuditor.evaluateCapacity(
+                getLatestSnapshot(),
+                compatibilityManager.getReport(),
+                maxPlayers
+        );
+    }
+
+    public File writeTunePresets(ServerConfigAuditor.AuditReport report) throws IOException {
+        return serverConfigAuditor.writePresets(dataFolder, report);
+    }
+
     public ConfigManager getConfigManager() { return configManager; }
     public CompatibilityManager getCompatibilityManager() { return compatibilityManager; }
     public SafeModeController getSafeModeController() { return safeModeController; }
@@ -416,6 +562,8 @@ public final class PerformanceEngine implements EngineLifecycle {
     public TaskMonitor getTaskMonitor() { return taskMonitor; }
     public StorageMonitor getStorageMonitor() { return storageMonitor; }
     public DiagnosticCoordinator getDiagnosticCoordinator() { return diagnosticCoordinator; }
+    public AlertManager getAlertManager() { return alertManager; }
+    public ServerConfigAuditor getServerConfigAuditor() { return serverConfigAuditor; }
     public OptimizationManager getOptimizationManager() { return optimizationManager; }
     public SparkIntegration getSparkIntegration() { return sparkIntegration; }
     public ChunkyIntegration getChunkyIntegration() { return chunkyIntegration; }

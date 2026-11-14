@@ -11,7 +11,7 @@ import java.util.List;
  */
 public final class ConfigMigrator {
 
-    public static final int CURRENT_CONFIG_VERSION = 2;
+    public static final int CURRENT_CONFIG_VERSION = 3;
 
     public List<String> migrateIfNeeded(FileConfiguration config) {
         List<String> notes = new ArrayList<String>();
@@ -48,10 +48,24 @@ public final class ConfigMigrator {
             setDefaultIfMissing(config, "integrations.spark.never-auto-upload", true);
             setDefaultIfMissing(config, "integrations.chunky.auto-install", true);
             setDefaultIfMissing(config, "integrations.chunky.never-auto-start-generation", true);
-
-            config.set("config-version", CURRENT_CONFIG_VERSION);
-            notes.add("Migrated configuration schema from version " + existingVersion + " to version " + CURRENT_CONFIG_VERSION + ".");
         }
+
+        // Migrate v2 -> v3
+        if (existingVersion < 3) {
+            setDefaultIfMissing(config, "optimization.modules.zero-alloc-world-scanner.enabled", true);
+            setDefaultIfMissing(config, "optimization.modules.low-memory-footprint-governor.enabled", true);
+            setDefaultIfMissing(config, "optimization.modules.low-memory-footprint-governor.compact-history-capacity", 90);
+            setDefaultIfMissing(config, "optimization.modules.low-memory-footprint-governor.compact-findings-history", 40);
+            setDefaultIfMissing(config, "optimization.modules.async-io-offloader.enabled", true);
+            setDefaultIfMissing(config, "optimization.modules.adaptive-telemetry-batcher.enabled", true);
+            setDefaultIfMissing(config, "alerts.console-alerts-enabled", true);
+            setDefaultIfMissing(config, "alerts.admin-permission-broadcast", false);
+            setDefaultIfMissing(config, "alerts.alert-cooldown-seconds", 60);
+            setDefaultIfMissing(config, "alerts.min-severity", "HIGH");
+        }
+
+        config.set("config-version", CURRENT_CONFIG_VERSION);
+        notes.add("Migrated configuration schema from version " + existingVersion + " to version " + CURRENT_CONFIG_VERSION + ".");
 
         return notes;
     }

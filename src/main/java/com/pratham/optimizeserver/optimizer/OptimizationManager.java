@@ -2,10 +2,12 @@ package com.pratham.optimizeserver.optimizer;
 
 import com.pratham.optimizeserver.analyzer.DiagnosticCoordinator;
 import com.pratham.optimizeserver.config.ConfigManager;
+import com.pratham.optimizeserver.metrics.MetricHistory;
 import com.pratham.optimizeserver.metrics.MetricRegistry;
 import com.pratham.optimizeserver.metrics.MetricSnapshot;
 import com.pratham.optimizeserver.monitoring.ChunkMonitor;
 import com.pratham.optimizeserver.monitoring.EntityMonitor;
+import com.pratham.optimizeserver.monitoring.MemoryMonitor;
 import com.pratham.optimizeserver.safety.GameplayInvariant;
 import com.pratham.optimizeserver.scheduler.BoundedWorkerPool;
 
@@ -20,6 +22,9 @@ import java.util.logging.Logger;
  */
 public final class OptimizationManager {
 
+    private static final long LOW_RAM_HEAP_BYTES = 1536L * 1024L * 1024L;
+    private static final double HIGH_HEAP_PRESSURE_PERCENT = 78.0;
+
     private final OptimizationRegistry registry;
     private final OptimizationValidator validator;
     private final RollbackManager rollbackManager;
@@ -30,9 +35,15 @@ public final class OptimizationManager {
     private final DiagnosticCoordinator diagnosticCoordinator;
     private final BoundedWorkerPool workerPool;
     private final Logger logger;
+    private volatile MemoryMonitor memoryMonitor;
 
     private final AtomicInteger adaptiveWorldSampleIntervalTicks = new AtomicInteger(100);
-    private volatile boolean taskBatchingEnabled = true;
+    private volatile boolean taskBatchingEnabled = false;
+    private volatile boolean asyncIoOffloadEnabled = false;
+    private volatile int savedHistoryCapacity = -1;
+    private volatile boolean lowMemoryCompacted = false;
+    private volatile double baselineMspt = -1.0;
+    private final AtomicInteger regressionStreak = new AtomicInteger(0);
 
     public OptimizationManager(OptimizationRegistry registry,
                                OptimizationValidator validator,
@@ -44,6 +55,21 @@ public final class OptimizationManager {
                                DiagnosticCoordinator diagnosticCoordinator,
                                BoundedWorkerPool workerPool,
                                Logger logger) {
+        this(registry, validator, rollbackManager, configManager, metricRegistry,
+                chunkMonitor, entityMonitor, null, diagnosticCoordinator, workerPool, logger);
+    }
+
+    public OptimizationManager(OptimizationRegistry registry,
+                               OptimizationValidator validator,
+                               RollbackManager rollbackManager,
+                               ConfigManager configManager,
+                               MetricRegistry metricRegistry,
+                               ChunkMonitor chunkMonitor,
+                               EntityMonitor entityMonitor,
+                               MemoryMonitor memoryMonitor,
+                               DiagnosticCoordinator diagnosticCoordinator,
+                               BoundedWorkerPool workerPool,
+                               Logger logger) {
         this.registry = registry;
         this.validator = validator;
         this.rollbackManager = rollbackManager;
@@ -51,10 +77,15 @@ public final class OptimizationManager {
         this.metricRegistry = metricRegistry;
         this.chunkMonitor = chunkMonitor;
         this.entityMonitor = entityMonitor;
+        this.memoryMonitor = memoryMonitor;
         this.diagnosticCoordinator = diagnosticCoordinator;
         this.workerPool = workerPool;
         this.logger = logger != null ? logger : Logger.getLogger("OptimizeServer");
         registerBuiltInModules();
+    }
+
+    public void setMemoryMonitor(MemoryMonitor memoryMonitor) {
+        this.memoryMonitor = memoryMonitor;
     }
 
     private void registerBuiltInModules() {
@@ -450,6 +481,170 @@ public final class OptimizationManager {
                         + ", cacheHits=" + diagnosticCoordinator.getCacheHits();
             }
         });
+
+        // 10. zero-alloc-world-scanner
+        registry.register(new BaseInternalModule(
+                "zero-alloc-world-scanner",
+                "Uses Paper O(1) entity counts, snapshot-free chunk tile reads, and time-budgeted incremental chunk scanning.",
+                OptimizationCategory.AUTOMATIC_SAFE,
+                "Eliminates main-thread BlockState snapshot copies and world entity list copies during telemetry."
+        ) {
+            private boolean previousState = true;
+
+            @Override
+            protected boolean doEnable() {
+                if (entityMonitor != null) {
+                    previousState = entityMonitor.isZeroAllocScanEnabled();
+                    beforeMeasurement = "zeroAllocScan=" + previousState
+                            + ", zeroSnapshotChunks=" + entityMonitor.getZeroSnapshotChunkReads();
+                    entityMonitor.setZeroAllocScanEnabled(true);
+                }
+                return true;
+            }
+
+            @Override
+            protected boolean doDisable() {
+                if (entityMonitor != null) {
+                    entityMonitor.setZeroAllocScanEnabled(false);
+                }
+                return true;
+            }
+
+            @Override
+            protected boolean doRollback() {
+                if (entityMonitor != null) {
+                    entityMonitor.setZeroAllocScanEnabled(previousState);
+                }
+                return true;
+            }
+
+            @Override
+            public String getAfterMeasurement() {
+                if (entityMonitor == null) return "N/A";
+                return "zeroAllocScan=" + entityMonitor.isZeroAllocScanEnabled()
+                        + ", zeroSnapshotChunks=" + entityMonitor.getZeroSnapshotChunkReads()
+                        + ", budgetYields=" + entityMonitor.getBudgetYieldCount();
+            }
+        });
+
+        // 11. low-memory-footprint-governor
+        registry.register(new BaseInternalModule(
+                "low-memory-footprint-governor",
+                "Compacts plugin telemetry ring buffers and diagnostic caches on low-RAM hosts or under OldGen heap pressure.",
+                OptimizationCategory.AUTOMATIC_SAFE,
+                "Keeps plugin heap overhead minimal on constrained heaps without affecting gameplay or world state."
+        ) {
+            @Override
+            protected boolean doEnable() {
+                MetricHistory history = metricRegistry != null ? metricRegistry.getHistory() : null;
+                int cap = history != null ? history.getCapacity() : 0;
+                if (cap > 0 && savedHistoryCapacity < 0) {
+                    savedHistoryCapacity = cap;
+                }
+                beforeMeasurement = "historyCapacity=" + cap + ", compacted=" + lowMemoryCompacted;
+                applyLowMemoryGovernance(history != null ? history.getLatest() : null);
+                return true;
+            }
+
+            @Override
+            protected boolean doDisable() {
+                restoreTelemetryMemory();
+                return true;
+            }
+
+            @Override
+            protected boolean doRollback() {
+                restoreTelemetryMemory();
+                return true;
+            }
+
+            @Override
+            public String getAfterMeasurement() {
+                MetricHistory history = metricRegistry != null ? metricRegistry.getHistory() : null;
+                return "historyCapacity=" + (history != null ? history.getCapacity() : 0)
+                        + ", compacted=" + lowMemoryCompacted;
+            }
+        });
+
+        // 12. async-io-offloader
+        registry.register(new BaseInternalModule(
+                "async-io-offloader",
+                "Offloads diagnostic reports, preset writes, and rotating activity log appends onto bounded async workers.",
+                OptimizationCategory.AUTOMATIC_SAFE,
+                "Prevents synchronous file I/O stalls on the server tick thread."
+        ) {
+            private boolean previousState = false;
+
+            @Override
+            protected boolean doEnable() {
+                previousState = asyncIoOffloadEnabled;
+                beforeMeasurement = "asyncIoOffload=" + previousState;
+                asyncIoOffloadEnabled = true;
+                return true;
+            }
+
+            @Override
+            protected boolean doDisable() {
+                asyncIoOffloadEnabled = false;
+                return true;
+            }
+
+            @Override
+            protected boolean doRollback() {
+                asyncIoOffloadEnabled = previousState;
+                return true;
+            }
+
+            @Override
+            public String getAfterMeasurement() {
+                return "asyncIoOffload=" + asyncIoOffloadEnabled;
+            }
+        });
+
+        // 13. adaptive-telemetry-batcher
+        registry.register(new BaseInternalModule(
+                "adaptive-telemetry-batcher",
+                "Dynamically pauses per-thread allocation MXBean sampling during MSPT spikes or CPU saturation.",
+                OptimizationCategory.CONDITIONAL,
+                "Preserves JVM CPU headroom under heavy tick load while retaining full telemetry during normal ticks."
+        ) {
+            private boolean previousState = true;
+
+            @Override
+            protected boolean doEnable() {
+                if (memoryMonitor != null) {
+                    previousState = memoryMonitor.isThreadAllocationSamplingEnabled();
+                    beforeMeasurement = "threadAllocSampling=" + previousState;
+                } else {
+                    beforeMeasurement = "threadAllocSampling=" + previousState;
+                }
+                MetricSnapshot latest = metricRegistry != null ? metricRegistry.getHistory().getLatest() : null;
+                evaluateAdaptiveTelemetryBatcher(latest);
+                return true;
+            }
+
+            @Override
+            protected boolean doDisable() {
+                if (memoryMonitor != null) {
+                    memoryMonitor.setThreadAllocationSamplingEnabled(true);
+                }
+                return true;
+            }
+
+            @Override
+            protected boolean doRollback() {
+                if (memoryMonitor != null) {
+                    memoryMonitor.setThreadAllocationSamplingEnabled(previousState);
+                }
+                return true;
+            }
+
+            @Override
+            public String getAfterMeasurement() {
+                if (memoryMonitor == null) return "N/A";
+                return "threadAllocSampling=" + memoryMonitor.isThreadAllocationSamplingEnabled();
+            }
+        });
     }
 
     /**
@@ -477,7 +672,7 @@ public final class OptimizationManager {
     }
 
     /**
-     * Evaluates conditional modules periodically against the latest {@link MetricSnapshot}.
+     * Evaluates conditional and adaptive modules periodically against the latest {@link MetricSnapshot}.
      */
     public void evaluateConditionalModules(MetricSnapshot latest) {
         if (latest == null) {
@@ -511,6 +706,133 @@ public final class OptimizationManager {
                 workerPool.adjustPoolLimits(configuredCore, configuredMax);
             }
         }
+
+        OptimizationModule lowMemGov = registry.getModule("low-memory-footprint-governor");
+        if (lowMemGov != null && lowMemGov.isEnabled()) {
+            applyLowMemoryGovernance(latest);
+        }
+
+        OptimizationModule batcher = registry.getModule("adaptive-telemetry-batcher");
+        if (batcher != null && batcher.isEnabled()) {
+            evaluateAdaptiveTelemetryBatcher(latest);
+        }
+
+        evaluateRegressionSafeguard(latest);
+    }
+
+    private void evaluateRegressionSafeguard(MetricSnapshot latest) {
+        if (!isAutoRollbackOnRegressionEnabled()) {
+            regressionStreak.set(0);
+            return;
+        }
+        double currentMspt = latest.getAverageMspt();
+        if (currentMspt <= 0.0) {
+            return;
+        }
+        if (baselineMspt < 0.0 && currentMspt < 55.0) {
+            baselineMspt = currentMspt;
+            return;
+        }
+        if (baselineMspt < 0.0) {
+            return;
+        }
+
+        boolean anyConditionalActive = false;
+        for (OptimizationModule mod : registry.getActiveModules()) {
+            if (mod != null && mod.getCategory() == OptimizationCategory.CONDITIONAL) {
+                anyConditionalActive = true;
+                break;
+            }
+        }
+        if (!anyConditionalActive) {
+            regressionStreak.set(0);
+            if (currentMspt < 55.0) {
+                baselineMspt = (baselineMspt * 0.8) + (currentMspt * 0.2);
+            }
+            return;
+        }
+
+        // Only roll back conditional tuning after 3 consecutive severe MSPT regressions above baseline
+        if (currentMspt >= 75.0 && (currentMspt - baselineMspt) >= 25.0) {
+            int streak = regressionStreak.incrementAndGet();
+            if (streak >= 3) {
+                int rolledBack = 0;
+                for (OptimizationModule mod : registry.getActiveModules()) {
+                    if (mod != null && mod.getCategory() == OptimizationCategory.CONDITIONAL) {
+                        if (rollbackManager.rollbackModule(mod,
+                                String.format(Locale.ROOT,
+                                        "Automatic regression safeguard: MSPT=%.2fms vs baseline=%.2fms",
+                                        currentMspt, baselineMspt))) {
+                            rolledBack++;
+                        }
+                    }
+                }
+                if (rolledBack > 0 && logger != null) {
+                    logger.warning("[OptimizeServer] Auto-rolled back " + rolledBack
+                            + " conditional module(s) after sustained MSPT regression ("
+                            + String.format(Locale.ROOT, "%.2fms vs baseline %.2fms", currentMspt, baselineMspt) + ").");
+                }
+                regressionStreak.set(0);
+            }
+        } else {
+            regressionStreak.set(0);
+            if (currentMspt < 50.0) {
+                baselineMspt = (baselineMspt * 0.8) + (currentMspt * 0.2);
+            }
+        }
+    }
+
+    private void evaluateAdaptiveTelemetryBatcher(MetricSnapshot latest) {
+        if (memoryMonitor == null) {
+            return;
+        }
+        if (latest != null && (latest.getAverageMspt() >= 40.0 || latest.getProcessCpuLoadPercent() >= 85.0)) {
+            memoryMonitor.setThreadAllocationSamplingEnabled(false);
+        } else {
+            memoryMonitor.setThreadAllocationSamplingEnabled(true);
+        }
+    }
+
+    private void applyLowMemoryGovernance(MetricSnapshot latest) {
+        long heapMax = latest != null && latest.getHeapMaxBytes() > 0L
+                ? latest.getHeapMaxBytes()
+                : Runtime.getRuntime().maxMemory();
+        double pressurePct = latest != null
+                ? Math.max(latest.getHeapUsagePercent(), latest.getPostGcHeapUsagePercent())
+                : 0.0;
+        boolean constrained = heapMax > 0L && heapMax <= LOW_RAM_HEAP_BYTES;
+        boolean pressured = pressurePct >= HIGH_HEAP_PRESSURE_PERCENT;
+
+        if (constrained || pressured) {
+            int targetCap = configManager != null
+                    ? configManager.getInt("optimization.modules.low-memory-footprint-governor.compact-history-capacity", 90)
+                    : 90;
+            int targetFindings = configManager != null
+                    ? configManager.getInt("optimization.modules.low-memory-footprint-governor.compact-findings-history", 40)
+                    : 40;
+            if (metricRegistry != null) {
+                MetricHistory history = metricRegistry.getHistory();
+                if (savedHistoryCapacity < 0) {
+                    savedHistoryCapacity = history.getCapacity();
+                }
+                if (history.getCapacity() > Math.max(16, targetCap)) {
+                    history.resizeCapacity(Math.max(16, targetCap));
+                }
+            }
+            if (diagnosticCoordinator != null) {
+                diagnosticCoordinator.trimForLowMemory(targetFindings);
+            }
+            lowMemoryCompacted = true;
+        } else if (lowMemoryCompacted && pressurePct < 65.0) {
+            restoreTelemetryMemory();
+        }
+    }
+
+    private void restoreTelemetryMemory() {
+        if (metricRegistry != null && savedHistoryCapacity > 0) {
+            metricRegistry.getHistory().resizeCapacity(savedHistoryCapacity);
+        }
+        lowMemoryCompacted = false;
     }
 
     public boolean enableModule(String id) {
@@ -553,6 +875,26 @@ public final class OptimizationManager {
 
     public boolean isTaskBatchingEnabled() {
         return taskBatchingEnabled;
+    }
+
+    public boolean isAsyncIoOffloadEnabled() {
+        return asyncIoOffloadEnabled;
+    }
+
+    public boolean isLowMemoryCompacted() {
+        return lowMemoryCompacted;
+    }
+
+    public boolean isAutoRollbackOnRegressionEnabled() {
+        return configManager == null || configManager.getBoolean("optimization.auto-rollback-on-regression", true);
+    }
+
+    public int getRegressionStreak() {
+        return regressionStreak.get();
+    }
+
+    public void setBaselineMspt(double baselineMspt) {
+        this.baselineMspt = baselineMspt;
     }
 
     public OptimizationRegistry getRegistry() {

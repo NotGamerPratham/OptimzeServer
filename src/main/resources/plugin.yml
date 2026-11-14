@@ -14,7 +14,7 @@ softdepend:
 commands:
   optimizeserver:
     description: Primary administrative command for OptimizeServer diagnostics, monitoring, and optimization.
-    usage: /<command> <help|version|status|tps|mspt|cpu|memory|network|chunks|entities|diagnose|profile|health|optimize|report|reload>
+    usage: /<command> <help|version|status|tps|mspt|cpu|memory|network|chunks|entities|diagnose|profile|health|optimize|tune|capacity|report|reload>
     aliases:
       - os
     permission: optimizeserver.status

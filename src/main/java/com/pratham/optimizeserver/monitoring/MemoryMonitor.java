@@ -3,19 +3,25 @@ package com.pratham.optimizeserver.monitoring;
 import java.lang.management.GarbageCollectorMXBean;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
+import java.lang.management.MemoryPoolMXBean;
+import java.lang.management.MemoryType;
 import java.lang.management.MemoryUsage;
 import java.lang.management.ThreadMXBean;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 /**
- * Monitors JVM heap, non-heap usage, garbage collection counts, GC pause trends, and memory allocation rate.
+ * Monitors JVM heap, post-GC old-generation occupancy, non-heap usage, garbage collection counts,
+ * GC pause trends, and memory allocation rate.
  * Never performs forced garbage collection (System.gc()).
  */
 public final class MemoryMonitor {
 
     private final MemoryMXBean memoryBean;
     private final List<GarbageCollectorMXBean> gcBeans;
+    private final List<MemoryPoolMXBean> oldGenPools;
     private final ThreadMXBean threadBean;
     private Method getThreadAllocatedBytesMethod;
 
@@ -23,9 +29,12 @@ public final class MemoryMonitor {
     private long lastGcTimeMs = 0L;
     private long lastAllocatedBytes = 0L;
 
+    private volatile boolean threadAllocationSamplingEnabled = true;
     private volatile long heapUsedBytes = 0L;
     private volatile long heapCommittedBytes = 0L;
     private volatile long heapMaxBytes = 0L;
+    private volatile long postGcHeapUsedBytes = 0L;
+    private volatile long postGcHeapMaxBytes = 0L;
     private volatile long nonHeapUsedBytes = 0L;
     private volatile long gcTotalCount = 0L;
     private volatile long gcTotalTimeMs = 0L;
@@ -35,8 +44,30 @@ public final class MemoryMonitor {
     public MemoryMonitor() {
         this.memoryBean = ManagementFactory.getMemoryMXBean();
         this.gcBeans = ManagementFactory.getGarbageCollectorMXBeans();
+        this.oldGenPools = findOldGenPools();
         this.threadBean = ManagementFactory.getThreadMXBean();
         initThreadAllocationReflection();
+    }
+
+    private static List<MemoryPoolMXBean> findOldGenPools() {
+        List<MemoryPoolMXBean> matched = new ArrayList<MemoryPoolMXBean>();
+        try {
+            List<MemoryPoolMXBean> all = ManagementFactory.getMemoryPoolMXBeans();
+            if (all != null) {
+                for (MemoryPoolMXBean pool : all) {
+                    if (pool == null || pool.getType() != MemoryType.HEAP) {
+                        continue;
+                    }
+                    String name = pool.getName() != null ? pool.getName().toLowerCase(Locale.ROOT) : "";
+                    if (name.contains("old") || name.contains("tenured")
+                            || name.contains("zheap") || name.contains("shenandoah")) {
+                        matched.add(pool);
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return matched;
     }
 
     private void initThreadAllocationReflection() {
@@ -90,7 +121,9 @@ public final class MemoryMonitor {
         this.gcTotalCount = totalCount;
         this.gcTotalTimeMs = totalTime;
 
-        long currentAllocated = readTotalAllocatedBytes();
+        samplePostGcPools();
+
+        long currentAllocated = threadAllocationSamplingEnabled ? readTotalAllocatedBytes() : lastAllocatedBytes;
 
         if (lastSampleNanos > 0L && nowNanos > lastSampleNanos) {
             double elapsedSeconds = (nowNanos - lastSampleNanos) / 1_000_000_000.0;
@@ -131,6 +164,39 @@ public final class MemoryMonitor {
         return 0L;
     }
 
+    private void samplePostGcPools() {
+        if (oldGenPools.isEmpty()) {
+            this.postGcHeapUsedBytes = 0L;
+            this.postGcHeapMaxBytes = 0L;
+            return;
+        }
+        long usedSum = 0L;
+        long maxSum = 0L;
+        for (MemoryPoolMXBean pool : oldGenPools) {
+            try {
+                MemoryUsage usage = pool.getCollectionUsage();
+                if (usage != null && usage.getUsed() >= 0L) {
+                    usedSum += usage.getUsed();
+                    long poolMax = usage.getMax() > 0L ? usage.getMax() : this.heapMaxBytes;
+                    if (poolMax > 0L) {
+                        maxSum += poolMax;
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        this.postGcHeapUsedBytes = usedSum;
+        this.postGcHeapMaxBytes = maxSum;
+    }
+
+    public void setThreadAllocationSamplingEnabled(boolean enabled) {
+        this.threadAllocationSamplingEnabled = enabled;
+    }
+
+    public boolean isThreadAllocationSamplingEnabled() {
+        return threadAllocationSamplingEnabled;
+    }
+
     public long getHeapUsedBytes() {
         return heapUsedBytes;
     }
@@ -141,6 +207,14 @@ public final class MemoryMonitor {
 
     public long getHeapMaxBytes() {
         return heapMaxBytes;
+    }
+
+    public long getPostGcHeapUsedBytes() {
+        return postGcHeapUsedBytes;
+    }
+
+    public long getPostGcHeapMaxBytes() {
+        return postGcHeapMaxBytes;
     }
 
     public long getNonHeapUsedBytes() {

@@ -228,6 +228,12 @@ public final class SparkIntegration {
             long nonHeapMb = snapshot.getNonHeapUsedBytes() / (1024L * 1024L);
             lines.add(String.format(Locale.ROOT, "Heap Usage: %d MB / %d MB (%.1f%%) | Committed: %d MB | Non-Heap: %d MB",
                     usedMb, maxMb, snapshot.getHeapUsagePercent(), commMb, nonHeapMb));
+            if (snapshot.getPostGcHeapMaxBytes() > 0L) {
+                long postUsedMb = snapshot.getPostGcHeapUsedBytes() / (1024L * 1024L);
+                long postMaxMb = snapshot.getPostGcHeapMaxBytes() / (1024L * 1024L);
+                lines.add(String.format(Locale.ROOT, "Post-GC OldGen: %d MB / %d MB (%.1f%%)",
+                        postUsedMb, postMaxMb, snapshot.getPostGcHeapUsagePercent()));
+            }
             lines.add(String.format(Locale.ROOT, "GC Totals: %d collections (%d ms total) | Recent Pause Rate: %.2f ms/s",
                     snapshot.getGcTotalCount(), snapshot.getGcTotalTimeMs(), snapshot.getRecentGcPauseRateMsPerSec()));
             if (snapshot.getRecentAllocatedBytesPerSec() > 0L) {

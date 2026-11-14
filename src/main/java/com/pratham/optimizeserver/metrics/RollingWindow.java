@@ -85,6 +85,50 @@ public final class RollingWindow {
         return new WindowStats(validCount, avg, min, max, stdDev, p50, p95, p99);
     }
 
+    /**
+     * Computes only the active sample count and mean in O(N) without sorting or scratch buffer writes.
+     */
+    public synchronized WindowAverage computeAverage(long nowNanos) {
+        if (size == 0) {
+            return WindowAverage.EMPTY;
+        }
+        long cutoff = nowNanos - windowDurationNanos;
+        int validCount = 0;
+        double sum = 0.0;
+        int startIdx = (head - size + capacity) % capacity;
+        for (int i = 0; i < size; i++) {
+            int idx = (startIdx + i) % capacity;
+            if (timestampsNanos[idx] >= cutoff) {
+                sum += values[idx];
+                validCount++;
+            }
+        }
+        if (validCount == 0) {
+            return WindowAverage.EMPTY;
+        }
+        return new WindowAverage(validCount, sum / validCount);
+    }
+
+    public static final class WindowAverage {
+        public static final WindowAverage EMPTY = new WindowAverage(0, 0.0);
+
+        private final int sampleCount;
+        private final double average;
+
+        public WindowAverage(int sampleCount, double average) {
+            this.sampleCount = sampleCount;
+            this.average = average;
+        }
+
+        public int getSampleCount() {
+            return sampleCount;
+        }
+
+        public double getAverage() {
+            return average;
+        }
+    }
+
     private static double percentileFromSorted(double[] sorted, int length, double quantile) {
         if (length <= 0) {
             return 0.0;

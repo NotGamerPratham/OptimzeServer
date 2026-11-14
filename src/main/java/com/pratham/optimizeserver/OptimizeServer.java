@@ -18,6 +18,7 @@ public final class OptimizeServer extends JavaPlugin {
 
     private ConfigManager configManager;
     private PerformanceEngine performanceEngine;
+    private ServerActivityListener activityListener;
 
     @Override
     public void onEnable() {
@@ -43,17 +44,17 @@ public final class OptimizeServer extends JavaPlugin {
 
             PluginManager pm = getServer().getPluginManager();
             if (pm != null) {
-                ServerActivityListener listener = new ServerActivityListener(
+                this.activityListener = new ServerActivityListener(
                         performanceEngine.getChunkMonitor(),
                         performanceEngine.getEntityMonitor(),
                         performanceEngine.getNetworkMonitor()
                 );
-                pm.registerEvents(listener, this);
+                pm.registerEvents(this.activityListener, this);
             }
 
             PluginCommand cmd = getCommand("optimizeserver");
             if (cmd != null) {
-                String version = getDescription() != null ? getDescription().getVersion() : "1.0.0";
+                String version = getDescription() != null ? getDescription().getVersion() : "1.2.0";
                 OptimizeServerCommand executor = new OptimizeServerCommand(performanceEngine, version);
                 cmd.setExecutor(executor);
                 cmd.setTabCompleter(executor);
@@ -73,6 +74,9 @@ public final class OptimizeServer extends JavaPlugin {
     @Override
     public void onDisable() {
         try {
+            if (activityListener != null) {
+                activityListener.setActive(false);
+            }
             if (performanceEngine != null) {
                 performanceEngine.stop();
             }

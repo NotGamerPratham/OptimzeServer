@@ -33,6 +33,8 @@ public final class MetricSnapshot {
     private final long heapUsedBytes;
     private final long heapCommittedBytes;
     private final long heapMaxBytes;
+    private final long postGcHeapUsedBytes;
+    private final long postGcHeapMaxBytes;
     private final long nonHeapUsedBytes;
     private final long gcTotalCount;
     private final long gcTotalTimeMs;
@@ -85,6 +87,8 @@ public final class MetricSnapshot {
         this.heapUsedBytes = b.heapUsedBytes;
         this.heapCommittedBytes = b.heapCommittedBytes;
         this.heapMaxBytes = b.heapMaxBytes;
+        this.postGcHeapUsedBytes = b.postGcHeapUsedBytes;
+        this.postGcHeapMaxBytes = b.postGcHeapMaxBytes;
         this.nonHeapUsedBytes = b.nonHeapUsedBytes;
         this.gcTotalCount = b.gcTotalCount;
         this.gcTotalTimeMs = b.gcTotalTimeMs;
@@ -137,6 +141,14 @@ public final class MetricSnapshot {
     public long getHeapUsedBytes() { return heapUsedBytes; }
     public long getHeapCommittedBytes() { return heapCommittedBytes; }
     public long getHeapMaxBytes() { return heapMaxBytes; }
+    public long getPostGcHeapUsedBytes() { return postGcHeapUsedBytes; }
+    public long getPostGcHeapMaxBytes() { return postGcHeapMaxBytes; }
+    public double getPostGcHeapUsagePercent() {
+        if (postGcHeapMaxBytes > 0L) {
+            return (postGcHeapUsedBytes * 100.0) / postGcHeapMaxBytes;
+        }
+        return getHeapUsagePercent();
+    }
     public long getNonHeapUsedBytes() { return nonHeapUsedBytes; }
     public double getHeapUsagePercent() {
         return heapMaxBytes > 0 ? (heapUsedBytes * 100.0) / heapMaxBytes : 0.0;
@@ -184,6 +196,8 @@ public final class MetricSnapshot {
         private long heapUsedBytes = 0L;
         private long heapCommittedBytes = 0L;
         private long heapMaxBytes = Runtime.getRuntime().maxMemory();
+        private long postGcHeapUsedBytes = 0L;
+        private long postGcHeapMaxBytes = 0L;
         private long nonHeapUsedBytes = 0L;
         private long gcTotalCount = 0L;
         private long gcTotalTimeMs = 0L;
@@ -227,6 +241,8 @@ public final class MetricSnapshot {
         public Builder heapUsedBytes(long val) { this.heapUsedBytes = val; return this; }
         public Builder heapCommittedBytes(long val) { this.heapCommittedBytes = val; return this; }
         public Builder heapMaxBytes(long val) { this.heapMaxBytes = val; return this; }
+        public Builder postGcHeapUsedBytes(long val) { this.postGcHeapUsedBytes = val; return this; }
+        public Builder postGcHeapMaxBytes(long val) { this.postGcHeapMaxBytes = val; return this; }
         public Builder nonHeapUsedBytes(long val) { this.nonHeapUsedBytes = val; return this; }
         public Builder gcTotalCount(long val) { this.gcTotalCount = val; return this; }
         public Builder gcTotalTimeMs(long val) { this.gcTotalTimeMs = val; return this; }
