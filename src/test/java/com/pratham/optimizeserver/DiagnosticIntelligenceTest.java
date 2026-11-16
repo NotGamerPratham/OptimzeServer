@@ -262,6 +262,10 @@ public class DiagnosticIntelligenceTest {
         ServerConfigAuditor.AuditReport audit = auditor.audit(serverRoot, paperServer, cm.getReport(), oneGbSnapshot);
 
         assertFalse(audit.getSuggestions().isEmpty());
+        for (ServerConfigAuditor.TuningSuggestion s : audit.getSuggestions()) {
+            // Movement-restricting settings alter vanilla gameplay and must never be recommended
+            assertFalse(s.getKey().contains("prevent-moving-into-unloaded-chunks"));
+        }
         assertNotNull(audit.getRecommendedJvmCommand());
         assertTrue(audit.getRecommendedJvmCommand().contains("UseG1GC"));
 

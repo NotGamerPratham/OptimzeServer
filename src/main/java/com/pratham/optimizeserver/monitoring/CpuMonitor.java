@@ -1,5 +1,6 @@
 package com.pratham.optimizeserver.monitoring;
 
+import com.pratham.optimizeserver.compatibility.ManagementBeans;
 import com.pratham.optimizeserver.metrics.RollingWindow;
 
 import java.lang.management.ManagementFactory;
@@ -13,8 +14,8 @@ public final class CpuMonitor {
 
     private final OperatingSystemMXBean osBean;
     private final int availableProcessors;
-    private Method getProcessCpuLoadMethod;
-    private Method getSystemCpuLoadMethod;
+    private volatile Method getProcessCpuLoadMethod;
+    private volatile Method getSystemCpuLoadMethod;
     private final RollingWindow processCpuWindow = new RollingWindow(60L, 120);
     private final RollingWindow systemCpuWindow = new RollingWindow(60L, 120);
 
@@ -31,27 +32,27 @@ public final class CpuMonitor {
         if (osBean == null) {
             return;
         }
-        Class<?> beanClass = osBean.getClass();
-        try {
-            getProcessCpuLoadMethod = beanClass.getMethod("getProcessCpuLoad");
-            getProcessCpuLoadMethod.setAccessible(true);
-        } catch (Throwable ignored) {
+        // Resolve through the exported com.sun.management interface: the implementation class is in a
+        // non-exported JDK package, so the old lookup silently failed on Java 16+ and CPU read as 0%.
+        Class<?> accessibleType = ManagementBeans.accessibleType(osBean, ManagementBeans.OS_BEAN_INTERFACE);
+        this.getProcessCpuLoadMethod = ManagementBeans.findUsable(osBean, accessibleType, "getProcessCpuLoad");
+        Method systemLoad = ManagementBeans.findUsable(osBean, accessibleType, "getCpuLoad"); // Java 14+
+        if (systemLoad == null) {
+            systemLoad = ManagementBeans.findUsable(osBean, accessibleType, "getSystemCpuLoad");
         }
-        try {
-            getSystemCpuLoadMethod = beanClass.getMethod("getSystemCpuLoad");
-            getSystemCpuLoadMethod.setAccessible(true);
-        } catch (Throwable ignored) {
-            try {
-                getSystemCpuLoadMethod = beanClass.getMethod("getCpuLoad");
-                getSystemCpuLoadMethod.setAccessible(true);
-            } catch (Throwable ignored2) {
-            }
-        }
+        this.getSystemCpuLoadMethod = systemLoad;
+    }
+
+    /**
+     * True when process CPU load comes from the JVM's native counter rather than the load-average estimate.
+     */
+    public boolean isNativeProcessCpuLoadAvailable() {
+        return getProcessCpuLoadMethod != null;
     }
 
     public void sample(long nowNanos) {
-        double procPercent = readLoadPercent(getProcessCpuLoadMethod);
-        double sysPercent = readLoadPercent(getSystemCpuLoadMethod);
+        double procPercent = readLoadPercent(getProcessCpuLoadMethod, true);
+        double sysPercent = readLoadPercent(getSystemCpuLoadMethod, false);
         if (procPercent < 0.0 && osBean != null) {
             double loadAvg = osBean.getSystemLoadAverage();
             if (loadAvg >= 0.0) {
@@ -70,7 +71,7 @@ public final class CpuMonitor {
         systemCpuWindow.record(sysPercent, nowNanos);
     }
 
-    private double readLoadPercent(Method method) {
+    private double readLoadPercent(Method method, boolean processLoad) {
         if (method == null || osBean == null) {
             return -1.0;
         }
@@ -83,6 +84,12 @@ public final class CpuMonitor {
                 }
             }
         } catch (Throwable ignored) {
+            // Stop paying for a reflective exception every second once an accessor proves unusable
+            if (processLoad) {
+                this.getProcessCpuLoadMethod = null;
+            } else {
+                this.getSystemCpuLoadMethod = null;
+            }
         }
         return -1.0;
     }

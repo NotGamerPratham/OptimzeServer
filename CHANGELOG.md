@@ -2,6 +2,22 @@
 
 All notable changes to **OptimizeServer** will be documented in this file.
 
+## [1.3.0] - 2026-11-16
+
+### Changed
+- **Exact, cheaper tick measurement on Paper:** `TickMonitor` now reads each tick's duration from Paper's `ServerTickEndEvent` (`PaperTickEventHook`, resolved reflectively). This removes the per-tick scheduler task and the per-tick `getTickTimes()` array copy, and P95/P99 MSPT now reflect real individual ticks instead of a 20-tick average. Spigot and Folia keep the scheduler sampler, and if a fork ships the event class but never fires it, the plugin switches back after 3 seconds. Toggle: `monitoring.sampling.use-paper-tick-events`.
+- **One write per tick:** a single `TickDurationRing` (exact integer prefix sums) replaces the five synchronized `RollingWindow`s. Window averages are O(log n), only the 1m window is sorted, and the sort runs outside the lock the tick thread writes under. Tick-history heap drops from ~640 KB to ~295 KB.
+- **Less main-thread work per second:** `TaskMonitor` (BukkitScheduler task enumeration, O(n²) in queued tasks) now runs on the async worker. World/entity sampling moved from the per-tick task onto the 1-second system sampler. Async snapshot cycles that overlap on a saturated CPU are skipped instead of queued.
+- **Allocation-free block-entity counts on Paper:** `EntityMonitor` uses `World#getTileEntityCount()` when available instead of copying `Chunk[]` arrays and creating a `BlockState` per block entity. Per-type spawn counters use an `AtomicIntegerArray` indexed by `EntityType` ordinal, so the entity-spawn listener does no hashing.
+- **Shared snapshot maps:** `MetricSnapshot` shares the frozen entity-count maps published by monitors instead of copying both maps into each of the up to 900 retained snapshots.
+- `/os tune` no longer recommends `prevent-moving-into-unloaded-chunks` (it rubber-bands players, which changes vanilla movement). Added zero-gameplay checks for `use-native-transport=false` on Linux and a missing `-XX:+AlwaysPreTouch` with a fixed heap.
+
+### Fixed
+- **CPU and allocation telemetry on Java 16+:** `CpuMonitor`, `MemoryMonitor`, and `CompatibilityManager` looked up methods on JDK-internal implementation classes, so on Java 16+ process CPU silently read 0% (on Windows) and allocation rate always read 0. This also disabled the CPU-based worker governor and alerts, and threw two exceptions every second. Lookups now go through the exported `com.sun.management` interfaces (new `ManagementBeans`); Java 21+ uses `getTotalThreadAllocatedBytes()`.
+- Reflective Paper accessors (`getTPS`, `getAverageTickTime`, `getTickTimes`, `getTileEntityCount`) are dropped after their first failure instead of throwing on every tick or sample.
+- `UniversalScheduler` no longer retains a handle for every one-shot task (a slow leak per command/alert); only repeating timers are tracked.
+- The allocation rate no longer spikes right after `adaptive-telemetry-batcher` resumes sampling.
+
 ## [1.2.0] - 2026-11-14
 
 ### Added

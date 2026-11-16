@@ -63,7 +63,7 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
 
     public OptimizeServerCommand(PerformanceEngine engine, String pluginVersion) {
         this.engine = engine;
-        this.pluginVersion = pluginVersion != null ? pluginVersion : "1.2.0";
+        this.pluginVersion = pluginVersion != null ? pluginVersion : "1.3.0";
     }
 
     @Override

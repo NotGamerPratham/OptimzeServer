@@ -5,16 +5,21 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Central registry managing rolling measurement windows (5s, 30s, 1m, 5m, 15m),
- * bounded historical snapshots, and reusable primitive buffers.
+ * Central registry managing the per-tick duration ring (serving the 5s, 30s, 1m, 5m, and 15m
+ * windows from a single write per tick), bounded historical snapshots, and reusable primitive buffers.
  */
 public final class MetricRegistry {
 
-    private final RollingWindow mspt5s;
-    private final RollingWindow mspt30s;
-    private final RollingWindow mspt1m;
-    private final RollingWindow mspt5m;
-    private final RollingWindow mspt15m;
+    public static final long WINDOW_5S_NANOS = 5L * 1_000_000_000L;
+    public static final long WINDOW_30S_NANOS = 30L * 1_000_000_000L;
+    public static final long WINDOW_1M_NANOS = 60L * 1_000_000_000L;
+    public static final long WINDOW_5M_NANOS = 300L * 1_000_000_000L;
+    public static final long WINDOW_15M_NANOS = 900L * 1_000_000_000L;
+
+    /** 15 minutes at 20 TPS (18,000 ticks) plus headroom for post-lag catch-up ticks. */
+    private static final int TICK_RING_CAPACITY = 18_432;
+
+    private final TickDurationRing tickRing;
     private final MetricHistory history;
     private final ArrayBlockingQueue<double[]> bufferPool;
     private final AtomicBoolean bufferPoolEnabled = new AtomicBoolean(true);
@@ -22,11 +27,7 @@ public final class MetricRegistry {
     private final AtomicLong bufferAllocations = new AtomicLong(0L);
 
     public MetricRegistry(int maxSnapshots, int bufferPoolCapacity) {
-        this.mspt5s = new RollingWindow(5L, 200);
-        this.mspt30s = new RollingWindow(30L, 800);
-        this.mspt1m = new RollingWindow(60L, 1400);
-        this.mspt5m = new RollingWindow(300L, 6200);
-        this.mspt15m = new RollingWindow(900L, 18200);
+        this.tickRing = new TickDurationRing(TICK_RING_CAPACITY);
         this.history = new MetricHistory(maxSnapshots);
         int safePoolCap = Math.max(8, bufferPoolCapacity);
         this.bufferPool = new ArrayBlockingQueue<double[]>(safePoolCap);
@@ -36,23 +37,15 @@ public final class MetricRegistry {
     }
 
     public void recordTickDurationMs(double mspt, long timestampNanos) {
-        mspt5s.record(mspt, timestampNanos);
-        mspt30s.record(mspt, timestampNanos);
-        mspt1m.record(mspt, timestampNanos);
-        mspt5m.record(mspt, timestampNanos);
-        mspt15m.record(mspt, timestampNanos);
+        tickRing.record(mspt, timestampNanos);
     }
 
     public void setZeroAllocAggregationEnabled(boolean enabled) {
-        mspt5s.setReuseScratchBuffer(enabled);
-        mspt30s.setReuseScratchBuffer(enabled);
-        mspt1m.setReuseScratchBuffer(enabled);
-        mspt5m.setReuseScratchBuffer(enabled);
-        mspt15m.setReuseScratchBuffer(enabled);
+        tickRing.setReuseScratchBuffer(enabled);
     }
 
     public boolean isZeroAllocAggregationEnabled() {
-        return mspt1m.isReuseScratchBuffer();
+        return tickRing.isReuseScratchBuffer();
     }
 
     public void setBufferPoolEnabled(boolean enabled) {
@@ -89,24 +82,8 @@ public final class MetricRegistry {
         return bufferAllocations.get();
     }
 
-    public RollingWindow getMspt5s() {
-        return mspt5s;
-    }
-
-    public RollingWindow getMspt30s() {
-        return mspt30s;
-    }
-
-    public RollingWindow getMspt1m() {
-        return mspt1m;
-    }
-
-    public RollingWindow getMspt5m() {
-        return mspt5m;
-    }
-
-    public RollingWindow getMspt15m() {
-        return mspt15m;
+    public TickDurationRing getTickRing() {
+        return tickRing;
     }
 
     public MetricHistory getHistory() {

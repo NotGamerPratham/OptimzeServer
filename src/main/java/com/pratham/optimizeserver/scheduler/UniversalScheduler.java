@@ -99,21 +99,19 @@ public final class UniversalScheduler implements SchedulerAdapter {
         if (task == null || server == null || plugin == null) {
             return new BoundedWorkerPool.NoOpTaskHandle();
         }
+        // One-shot tasks are not tracked: they finish on their own (the server cancels any still queued when
+        // the plugin disables), and tracking them leaked one handle per command/alert into a copy-on-write list.
         if (foliaMode && globalRegionScheduler != null && globalRunMethod != null) {
             try {
                 Object scheduledTask = globalRunMethod.invoke(globalRegionScheduler, plugin, toConsumer(task));
-                TaskHandle handle = new ReflectiveTaskHandle(scheduledTask);
-                trackedHandles.add(handle);
-                return handle;
+                return new ReflectiveTaskHandle(scheduledTask);
             } catch (Throwable t) {
                 logger.log(Level.WARNING, "[OptimizeServer] Error scheduling global Folia task", t);
                 return new BoundedWorkerPool.NoOpTaskHandle();
             }
         }
         BukkitTask bukkitTask = server.getScheduler().runTask(plugin, wrapSafe(task));
-        TaskHandle handle = new BukkitTaskHandle(bukkitTask);
-        trackedHandles.add(handle);
-        return handle;
+        return new BukkitTaskHandle(bukkitTask);
     }
 
     @Override
@@ -125,18 +123,14 @@ public final class UniversalScheduler implements SchedulerAdapter {
         if (foliaMode && globalRegionScheduler != null && globalRunDelayedMethod != null) {
             try {
                 Object scheduledTask = globalRunDelayedMethod.invoke(globalRegionScheduler, plugin, toConsumer(task), safeDelay);
-                TaskHandle handle = new ReflectiveTaskHandle(scheduledTask);
-                trackedHandles.add(handle);
-                return handle;
+                return new ReflectiveTaskHandle(scheduledTask);
             } catch (Throwable t) {
                 logger.log(Level.WARNING, "[OptimizeServer] Error scheduling delayed Folia task", t);
                 return new BoundedWorkerPool.NoOpTaskHandle();
             }
         }
         BukkitTask bukkitTask = server.getScheduler().runTaskLater(plugin, wrapSafe(task), safeDelay);
-        TaskHandle handle = new BukkitTaskHandle(bukkitTask);
-        trackedHandles.add(handle);
-        return handle;
+        return new BukkitTaskHandle(bukkitTask);
     }
 
     @Override

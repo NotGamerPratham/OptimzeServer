@@ -35,6 +35,9 @@ monitoring:
   sampling:
     # Tick monitoring interval in server ticks (1 = every tick for monotonic MSPT accuracy)
     tick-sample-interval-ticks: 1
+    # On Paper and forks, read each tick's exact duration from the server's own ServerTickEndEvent
+    # instead of running a per-tick scheduler task (falls back automatically on Spigot/Folia)
+    use-paper-tick-events: true
     # System/JVM metric snapshot interval in server ticks (20 = 1 second)
     system-sample-interval-ticks: 20
     # World/Chunk/Entity lightweight summary interval in server ticks (100 = 5 seconds)

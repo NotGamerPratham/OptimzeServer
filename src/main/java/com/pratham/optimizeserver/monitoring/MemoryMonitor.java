@@ -1,5 +1,7 @@
 package com.pratham.optimizeserver.monitoring;
 
+import com.pratham.optimizeserver.compatibility.ManagementBeans;
+
 import java.lang.management.GarbageCollectorMXBean;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
@@ -23,11 +25,14 @@ public final class MemoryMonitor {
     private final List<GarbageCollectorMXBean> gcBeans;
     private final List<MemoryPoolMXBean> oldGenPools;
     private final ThreadMXBean threadBean;
-    private Method getThreadAllocatedBytesMethod;
+    private volatile Method getThreadAllocatedBytesMethod;
+    // Java 21+: one cumulative JVM-wide counter (includes exited threads) instead of an id array + per-thread array
+    private volatile Method getTotalThreadAllocatedBytesMethod;
 
     private long lastSampleNanos = 0L;
     private long lastGcTimeMs = 0L;
     private long lastAllocatedBytes = 0L;
+    private boolean allocBaselineFresh = false;
 
     private volatile boolean threadAllocationSamplingEnabled = true;
     private volatile long heapUsedBytes = 0L;
@@ -74,18 +79,32 @@ public final class MemoryMonitor {
         if (threadBean == null) {
             return;
         }
+        // Resolved through the exported com.sun.management.ThreadMXBean interface; the previous lookup on the
+        // non-exported implementation class failed on Java 16+, so allocation telemetry always read zero.
+        Class<?> type = ManagementBeans.accessibleType(threadBean, ManagementBeans.THREAD_BEAN_INTERFACE);
         try {
-            Method isSupported = threadBean.getClass().getMethod("isThreadAllocatedMemorySupported");
-            isSupported.setAccessible(true);
-            if (Boolean.TRUE.equals(isSupported.invoke(threadBean))) {
-                Method setEnabled = threadBean.getClass().getMethod("setThreadAllocatedMemoryEnabled", boolean.class);
-                setEnabled.setAccessible(true);
-                setEnabled.invoke(threadBean, true);
-                getThreadAllocatedBytesMethod = threadBean.getClass().getMethod("getThreadAllocatedBytes", long[].class);
-                getThreadAllocatedBytesMethod.setAccessible(true);
+            Method isSupported = ManagementBeans.findUsable(threadBean, type, "isThreadAllocatedMemorySupported");
+            if (isSupported == null || !Boolean.TRUE.equals(isSupported.invoke(threadBean))) {
+                return;
             }
+            Method isEnabled = ManagementBeans.findUsable(threadBean, type, "isThreadAllocatedMemoryEnabled");
+            if (isEnabled != null && !Boolean.TRUE.equals(isEnabled.invoke(threadBean))) {
+                Method setEnabled = ManagementBeans.findUsable(threadBean, type, "setThreadAllocatedMemoryEnabled", boolean.class);
+                if (setEnabled != null) {
+                    setEnabled.invoke(threadBean, Boolean.TRUE);
+                }
+            }
+            this.getTotalThreadAllocatedBytesMethod = ManagementBeans.findUsable(threadBean, type, "getTotalThreadAllocatedBytes");
+            this.getThreadAllocatedBytesMethod = ManagementBeans.findUsable(threadBean, type, "getThreadAllocatedBytes", long[].class);
         } catch (Throwable ignored) {
         }
+    }
+
+    /**
+     * True when allocation-rate telemetry is backed by a working JVM counter.
+     */
+    public boolean isAllocationTelemetryAvailable() {
+        return getTotalThreadAllocatedBytesMethod != null || getThreadAllocatedBytesMethod != null;
     }
 
     public void sample(long nowNanos) {
@@ -123,7 +142,8 @@ public final class MemoryMonitor {
 
         samplePostGcPools();
 
-        long currentAllocated = threadAllocationSamplingEnabled ? readTotalAllocatedBytes() : lastAllocatedBytes;
+        boolean allocSampled = threadAllocationSamplingEnabled;
+        long currentAllocated = allocSampled ? readTotalAllocatedBytes() : lastAllocatedBytes;
 
         if (lastSampleNanos > 0L && nowNanos > lastSampleNanos) {
             double elapsedSeconds = (nowNanos - lastSampleNanos) / 1_000_000_000.0;
@@ -131,7 +151,9 @@ public final class MemoryMonitor {
                 long deltaGcMs = Math.max(0L, totalTime - lastGcTimeMs);
                 this.recentGcPauseRateMsPerSec = deltaGcMs / elapsedSeconds;
 
-                if (currentAllocated >= lastAllocatedBytes && lastAllocatedBytes > 0L) {
+                // A baseline taken before a pause would attribute the whole pause's allocations to one interval
+                if (allocSampled && allocBaselineFresh
+                        && currentAllocated >= lastAllocatedBytes && lastAllocatedBytes > 0L) {
                     this.recentAllocatedBytesPerSec = (long) ((currentAllocated - lastAllocatedBytes) / elapsedSeconds);
                 }
             }
@@ -140,15 +162,31 @@ public final class MemoryMonitor {
         this.lastSampleNanos = nowNanos;
         this.lastGcTimeMs = totalTime;
         this.lastAllocatedBytes = currentAllocated;
+        this.allocBaselineFresh = allocSampled;
     }
 
     private long readTotalAllocatedBytes() {
-        if (getThreadAllocatedBytesMethod == null || threadBean == null) {
+        if (threadBean == null) {
+            return 0L;
+        }
+        Method total = this.getTotalThreadAllocatedBytesMethod;
+        if (total != null) {
+            try {
+                Object raw = total.invoke(threadBean);
+                if (raw instanceof Number && ((Number) raw).longValue() >= 0L) {
+                    return ((Number) raw).longValue();
+                }
+            } catch (Throwable ignored) {
+                this.getTotalThreadAllocatedBytesMethod = null;
+            }
+        }
+        Method perThread = this.getThreadAllocatedBytesMethod;
+        if (perThread == null) {
             return 0L;
         }
         try {
             long[] ids = threadBean.getAllThreadIds();
-            Object raw = getThreadAllocatedBytesMethod.invoke(threadBean, (Object) ids);
+            Object raw = perThread.invoke(threadBean, (Object) ids);
             if (raw instanceof long[]) {
                 long[] bytes = (long[]) raw;
                 long sum = 0L;
@@ -160,6 +198,7 @@ public final class MemoryMonitor {
                 return sum;
             }
         } catch (Throwable ignored) {
+            this.getThreadAllocatedBytesMethod = null;
         }
         return 0L;
     }

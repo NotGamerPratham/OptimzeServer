@@ -9,24 +9,29 @@ import org.bukkit.block.BlockState;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 
+import com.pratham.optimizeserver.metrics.FrozenCounts;
+
 import java.lang.reflect.Method;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Monitors total entities, entity distribution by type and world, and block/tile entity counts.
- * Uses zero-snapshot Paper APIs where available and time-budgeted incremental chunk slicing
- * so scanning thousands of loaded chunks never spikes main-thread tick time or heap churn.
+ * Uses Paper's allocation-free world counters ({@code World#getEntityCount()},
+ * {@code World#getTileEntityCount()}) where available, and otherwise snapshot-free chunk reads with
+ * time-budgeted incremental chunk slicing, so scanning thousands of loaded chunks never spikes
+ * main-thread tick time or heap churn.
  * Strictly read-only: never removes entities, alters spawn limits, or disables mob AI.
  */
 public final class EntityMonitor {
 
     private static final long DEFAULT_TILE_SCAN_BUDGET_NANOS = 400_000L; // 0.40 ms cap per sample
+    private static final EntityType[] ENTITY_TYPES = EntityType.values();
 
     private final Server server;
     private final SchedulerAdapter scheduler;
@@ -34,10 +39,16 @@ public final class EntityMonitor {
     private final Method worldEntityCountMethod;
     private final Method chunkTileEntitiesNoSnapshotMethod;
 
+    // Resolved lazily against the live World implementation (Paper's CraftWorld exposes it; Spigot does not)
+    private volatile Class<?> tileCountWorldClass;
+    private volatile Method worldTileEntityCountMethod;
+
     private final AtomicInteger eventTrackedTotalEntities = new AtomicInteger(0);
-    private final Map<String, AtomicInteger> eventTrackedByType = new ConcurrentHashMap<String, AtomicInteger>();
+    // Indexed by EntityType ordinal: the spawn listener fires for every item, orb, and projectile, so no hashing
+    private final AtomicIntegerArray eventTrackedByType = new AtomicIntegerArray(ENTITY_TYPES.length);
     private final AtomicLong budgetYieldCount = new AtomicLong(0L);
     private final AtomicLong zeroSnapshotChunkReads = new AtomicLong(0L);
+    private final AtomicLong fastTileCountReads = new AtomicLong(0L);
 
     private long lastSampleNanos = 0L;
     private volatile long coalesceWindowNanos = 250_000_000L;
@@ -73,16 +84,10 @@ public final class EntityMonitor {
     public void recordEntitySpawn(EntityType type) {
         eventTrackedTotalEntities.incrementAndGet();
         if (type != null) {
-            String key = type.name();
-            AtomicInteger counter = eventTrackedByType.get(key);
-            if (counter == null) {
-                counter = new AtomicInteger(0);
-                AtomicInteger existing = eventTrackedByType.putIfAbsent(key, counter);
-                if (existing != null) {
-                    counter = existing;
-                }
+            int ordinal = type.ordinal();
+            if (ordinal < ENTITY_TYPES.length) {
+                eventTrackedByType.incrementAndGet(ordinal);
             }
-            counter.incrementAndGet();
         }
     }
 
@@ -92,11 +97,11 @@ public final class EntityMonitor {
             eventTrackedTotalEntities.set(0);
         }
         if (type != null) {
-            AtomicInteger counter = eventTrackedByType.get(type.name());
-            if (counter != null) {
-                int v = counter.decrementAndGet();
+            int ordinal = type.ordinal();
+            if (ordinal < ENTITY_TYPES.length) {
+                int v = eventTrackedByType.decrementAndGet(ordinal);
                 if (v < 0) {
-                    counter.set(0);
+                    eventTrackedByType.set(ordinal, 0);
                 }
             }
         }
@@ -128,6 +133,10 @@ public final class EntityMonitor {
 
     public long getZeroSnapshotChunkReads() {
         return zeroSnapshotChunkReads.get();
+    }
+
+    public long getFastTileCountReads() {
+        return fastTileCountReads.get();
     }
 
     /**
@@ -186,13 +195,9 @@ public final class EntityMonitor {
                     }
                 }
                 this.totalEntities = total;
-                this.entitiesByWorld = byWorld.isEmpty()
-                        ? Collections.<String, Integer>emptyMap()
-                        : Collections.unmodifiableMap(byWorld);
+                this.entitiesByWorld = FrozenCounts.adopt(byWorld);
                 if (byType != null) {
-                    this.entitiesByType = byType.isEmpty()
-                            ? Collections.<String, Integer>emptyMap()
-                            : Collections.unmodifiableMap(byType);
+                    this.entitiesByType = FrozenCounts.adopt(byType);
                 } else {
                     this.entitiesByType = buildTypeSnapshotFromEvents();
                 }
@@ -220,6 +225,17 @@ public final class EntityMonitor {
         if (worlds == null || worlds.isEmpty()) {
             this.tileEntityCount = 0;
             return;
+        }
+        if (zeroAllocScanEnabled) {
+            int fastTotal = readTileEntityCountFast(worlds);
+            if (fastTotal >= 0) {
+                // Paper sums its block-entity maps directly: no Chunk[] copy and no BlockState wrappers
+                this.tileEntityCount = fastTotal;
+                this.scanWorldCursor = 0;
+                this.scanChunkCursor = 0;
+                this.incrementalTileAccum = 0;
+                return;
+            }
         }
         if (!zeroAllocScanEnabled) {
             int fullTiles = 0;
@@ -272,6 +288,50 @@ public final class EntityMonitor {
         this.incrementalTileAccum = 0;
     }
 
+    /**
+     * Sums {@code World#getTileEntityCount()} across worlds, or returns -1 when the live World
+     * implementation does not expose it (Spigot/CraftBukkit) so the caller falls back to chunk scanning.
+     */
+    private int readTileEntityCountFast(List<World> worlds) {
+        int total = 0;
+        for (World world : worlds) {
+            if (world == null) {
+                continue;
+            }
+            Method method = resolveTileEntityCountMethod(world.getClass());
+            if (method == null) {
+                return -1;
+            }
+            try {
+                Object raw = method.invoke(world);
+                if (!(raw instanceof Number)) {
+                    return -1;
+                }
+                total += Math.max(0, ((Number) raw).intValue());
+            } catch (Throwable ignored) {
+                // Never retry a broken accessor every sample; chunk scanning remains available
+                this.worldTileEntityCountMethod = null;
+                this.tileCountWorldClass = world.getClass();
+                return -1;
+            }
+        }
+        fastTileCountReads.incrementAndGet();
+        return total;
+    }
+
+    private Method resolveTileEntityCountMethod(Class<?> worldClass) {
+        if (worldClass == tileCountWorldClass) {
+            return worldTileEntityCountMethod;
+        }
+        Method resolved = findOptionalMethod(worldClass, "getTileEntityCount");
+        if (resolved != null && resolved.getReturnType() != int.class) {
+            resolved = null;
+        }
+        this.worldTileEntityCountMethod = resolved;
+        this.tileCountWorldClass = worldClass;
+        return resolved;
+    }
+
     private int countChunkTileEntities(Chunk chunk) {
         if (chunk == null) {
             return 0;
@@ -291,17 +351,17 @@ public final class EntityMonitor {
     }
 
     private Map<String, Integer> buildTypeSnapshotFromEvents() {
-        if (eventTrackedByType.isEmpty()) {
-            return Collections.emptyMap();
-        }
-        Map<String, Integer> snapshot = new HashMap<String, Integer>();
-        for (Map.Entry<String, AtomicInteger> entry : eventTrackedByType.entrySet()) {
-            int count = entry.getValue().get();
+        Map<String, Integer> snapshot = null;
+        for (int i = 0; i < ENTITY_TYPES.length; i++) {
+            int count = eventTrackedByType.get(i);
             if (count > 0) {
-                snapshot.put(entry.getKey(), Integer.valueOf(count));
+                if (snapshot == null) {
+                    snapshot = new HashMap<String, Integer>();
+                }
+                snapshot.put(ENTITY_TYPES[i].name(), Integer.valueOf(count));
             }
         }
-        return snapshot.isEmpty() ? Collections.<String, Integer>emptyMap() : Collections.unmodifiableMap(snapshot);
+        return snapshot == null ? Collections.<String, Integer>emptyMap() : FrozenCounts.adopt(snapshot);
     }
 
     private void fallbackToEventCounters() {

@@ -1,7 +1,5 @@
 package com.pratham.optimizeserver.metrics;
 
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -106,12 +104,9 @@ public final class MetricSnapshot {
         this.chunkGenRatePerSec = b.chunkGenRatePerSec;
         this.totalEntities = b.totalEntities;
         this.tileEntityCount = b.tileEntityCount;
-        this.entitiesByType = b.entitiesByType != null
-                ? Collections.unmodifiableMap(new HashMap<String, Integer>(b.entitiesByType))
-                : Collections.<String, Integer>emptyMap();
-        this.entitiesByWorld = b.entitiesByWorld != null
-                ? Collections.unmodifiableMap(new HashMap<String, Integer>(b.entitiesByWorld))
-                : Collections.<String, Integer>emptyMap();
+        // Monitor-published maps are already frozen and shared by reference; anything else is copied
+        this.entitiesByType = FrozenCounts.share(b.entitiesByType);
+        this.entitiesByWorld = FrozenCounts.share(b.entitiesByWorld);
         this.pendingServerTasks = b.pendingServerTasks;
         this.activeServerWorkers = b.activeServerWorkers;
         this.freeDiskSpaceMb = b.freeDiskSpaceMb;

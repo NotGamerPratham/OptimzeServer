@@ -195,10 +195,9 @@ public final class CompatibilityManager {
             if (osBean == null) {
                 return false;
             }
-            Method m = osBean.getClass().getMethod("getProcessCpuLoad");
-            m.setAccessible(true);
-            Object val = m.invoke(osBean);
-            return val instanceof Number;
+            Class<?> type = ManagementBeans.accessibleType(osBean, ManagementBeans.OS_BEAN_INTERFACE);
+            Method m = ManagementBeans.findUsable(osBean, type, "getProcessCpuLoad");
+            return m != null && m.invoke(osBean) instanceof Number;
         } catch (Throwable ignored) {
             return false;
         }
@@ -210,10 +209,9 @@ public final class CompatibilityManager {
             if (tmBean == null) {
                 return false;
             }
-            Method m = tmBean.getClass().getMethod("isThreadAllocatedMemorySupported");
-            m.setAccessible(true);
-            Object val = m.invoke(tmBean);
-            return Boolean.TRUE.equals(val);
+            Class<?> type = ManagementBeans.accessibleType(tmBean, ManagementBeans.THREAD_BEAN_INTERFACE);
+            Method m = ManagementBeans.findUsable(tmBean, type, "isThreadAllocatedMemorySupported");
+            return m != null && Boolean.TRUE.equals(m.invoke(tmBean));
         } catch (Throwable ignored) {
             return false;
         }

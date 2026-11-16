@@ -334,6 +334,15 @@ public final class ServerConfigAuditor {
                     "Stops plugins or libraries from triggering stop-the-world Full GC via System.gc()."
             ));
         }
+        if (jvm.hasMatchingXmsXmx() && !jvm.getJvmArguments().contains("-XX:+AlwaysPreTouch")) {
+            out.add(new TuningSuggestion(
+                    "startup-flags",
+                    "-XX:+AlwaysPreTouch",
+                    "Missing",
+                    "-XX:+AlwaysPreTouch",
+                    "Commits the fixed heap at startup so the OS does not page-fault it in during live ticks."
+            ));
+        }
         if (!jvm.isUsingG1GC() && !jvm.isUsingZGC()) {
             out.add(new TuningSuggestion(
                     "startup-flags",
@@ -361,6 +370,17 @@ public final class ServerConfigAuditor {
                     "true",
                     "false",
                     "Prevents blocking synchronous chunk disk-flush stalls on Linux/Paper without altering world data or gameplay."
+            ));
+        }
+
+        String nativeTransport = props.getProperty("use-native-transport");
+        if ("false".equalsIgnoreCase(nativeTransport != null ? nativeTransport.trim() : null) && isLinuxHost()) {
+            out.add(new TuningSuggestion(
+                    "server.properties",
+                    "use-native-transport",
+                    "false",
+                    "true",
+                    "Linux epoll networking uses less CPU per connection than the NIO fallback; packets and gameplay are identical."
             ));
         }
 
@@ -471,15 +491,8 @@ public final class ServerConfigAuditor {
                         "Spreads incremental chunk saving smoothly across ticks, cutting P95/P99 MSPT spikes without altering gameplay."
                 ));
             }
-            if (!paperWorldDefaults.getBoolean("chunks.prevent-moving-into-unloaded-chunks", false)) {
-                out.add(new TuningSuggestion(
-                        "config/paper-world-defaults.yml",
-                        "chunks.prevent-moving-into-unloaded-chunks",
-                        "false",
-                        "true",
-                        "Stops fast-moving players or elytras from stalling the main tick thread waiting on synchronous chunk reads."
-                ));
-            }
+            // prevent-moving-into-unloaded-chunks is intentionally NOT suggested: it rubber-bands players,
+            // which changes vanilla movement behaviour.
         } else if (legacyPaper != null) {
             int maxSave = legacyPaper.getInt("world-settings.default.max-auto-save-chunks-per-tick", 24);
             if (maxSave > 10) {
@@ -489,15 +502,6 @@ public final class ServerConfigAuditor {
                         String.valueOf(maxSave),
                         "6",
                         "Spreads incremental chunk saving smoothly across ticks without altering gameplay."
-                ));
-            }
-            if (!legacyPaper.getBoolean("world-settings.default.prevent-moving-into-unloaded-chunks", false)) {
-                out.add(new TuningSuggestion(
-                        "paper.yml",
-                        "world-settings.default.prevent-moving-into-unloaded-chunks",
-                        "false",
-                        "true",
-                        "Prevents main-thread stalls when players sprint/elytra into unloaded chunks."
                 ));
             }
         }
@@ -549,6 +553,11 @@ public final class ServerConfigAuditor {
             return true;
         }
         return legacyPaper != null && legacyPaper.getBoolean("settings.velocity-support.enabled", false);
+    }
+
+    private static boolean isLinuxHost() {
+        String os = System.getProperty("os.name", "");
+        return os.toLowerCase(Locale.ROOT).contains("linux");
     }
 
     private static int resolveMaxPlayers(Server server) {

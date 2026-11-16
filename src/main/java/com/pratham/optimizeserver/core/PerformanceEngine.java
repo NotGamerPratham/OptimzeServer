@@ -17,6 +17,7 @@ import com.pratham.optimizeserver.monitoring.CpuMonitor;
 import com.pratham.optimizeserver.monitoring.EntityMonitor;
 import com.pratham.optimizeserver.monitoring.MemoryMonitor;
 import com.pratham.optimizeserver.monitoring.NetworkMonitor;
+import com.pratham.optimizeserver.monitoring.PaperTickEventHook;
 import com.pratham.optimizeserver.monitoring.StorageMonitor;
 import com.pratham.optimizeserver.monitoring.TaskMonitor;
 import com.pratham.optimizeserver.monitoring.TickMonitor;
@@ -38,6 +39,7 @@ import org.bukkit.plugin.Plugin;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Logger;
 
@@ -78,11 +80,20 @@ public final class PerformanceEngine implements EngineLifecycle {
     private DependencyAutoInstaller dependencyAutoInstaller;
     private ReportGenerator reportGenerator;
 
+    /** System samples (one per second) without a ServerTickEndEvent before falling back to a per-tick task. */
+    private static final int TICK_EVENT_GRACE_SAMPLES = 3;
+
     private TaskHandle tickSamplerHandle;
     private TaskHandle systemSamplerHandle;
     private TaskHandle asyncBackgroundHandle;
-    private final AtomicLong tickCounter = new AtomicLong(0L);
+    private volatile PaperTickEventHook tickEventHook;
     private final AtomicLong lastStorageSampleMillis = new AtomicLong(0L);
+    private final AtomicBoolean asyncSnapshotInFlight = new AtomicBoolean(false);
+    private final AtomicLong skippedAsyncSnapshots = new AtomicLong(0L);
+    // Mutated only by the system sampler on the main/global thread
+    private int worldTicksSinceSample = 0;
+    private int samplesWithoutTickEvents = 0;
+    private long lastObservedTickEvents = 0L;
 
     private volatile EngineState state = EngineState.UNINITIALIZED;
 
@@ -226,58 +237,52 @@ public final class PerformanceEngine implements EngineLifecycle {
                 ? Math.max(1000L, configManager.getLong("monitoring.sampling.background-sample-interval-ms", 5000L))
                 : 5000L;
 
-        this.tickSamplerHandle = scheduler.runGlobalTimer(new Runnable() {
+        // Exact per-tick MSPT from Paper's own ServerTickEndEvent: no per-tick scheduler task and no
+        // per-tick getTickTimes() array copy. Folia has no global tick loop, so it keeps the global-region task.
+        boolean usePaperTickEvents = configManager == null
+                || configManager.getBoolean("monitoring.sampling.use-paper-tick-events", true);
+        if (usePaperTickEvents && plugin != null && !scheduler.isRegionThreaded()) {
+            this.tickEventHook = PaperTickEventHook.tryRegister(plugin, server, tickMonitor, logger);
+        }
+        if (tickEventHook == null) {
+            startPerTickSampler(tickInterval);
+        }
+
+        final Runnable asyncSnapshotTask = new Runnable() {
             @Override
             public void run() {
-                tickMonitor.onServerTick(tickInterval);
-                long currentTick = tickCounter.incrementAndGet() * tickInterval;
-                int worldInterval = optimizationManager.getEffectiveWorldSampleIntervalTicks();
-                if (currentTick % worldInterval == 0) {
-                    long nowNanos = System.nanoTime();
-                    chunkMonitor.sampleMainThread(nowNanos);
-                    entityMonitor.sampleMainThread(nowNanos);
+                try {
+                    publishAsyncSnapshot(bgIntervalMs);
+                } finally {
+                    asyncSnapshotInFlight.set(false);
                 }
             }
-        }, 1L, tickInterval);
+        };
 
         this.systemSamplerHandle = scheduler.runGlobalTimer(new Runnable() {
             @Override
             public void run() {
                 long nowNanos = System.nanoTime();
+                verifyTickEventSource(tickInterval);
                 networkMonitor.sampleMainThread(nowNanos);
-                taskMonitor.sample();
 
-                // Assemble and publish immutable MetricSnapshot and rolling aggregates asynchronously
-                scheduler.runAsync(new Runnable() {
-                    @Override
-                    public void run() {
-                        long asyncNanos = System.nanoTime();
-                        tickMonitor.refreshAggregates(asyncNanos);
-                        cpuMonitor.sample(asyncNanos);
-                        memoryMonitor.sample(asyncNanos);
-                        if (optimizationManager.isTaskBatchingEnabled()) {
-                            long nowMs = System.currentTimeMillis();
-                            long lastMs = lastStorageSampleMillis.get();
-                            if ((nowMs - lastMs) >= bgIntervalMs
-                                    && lastStorageSampleMillis.compareAndSet(lastMs, nowMs)) {
-                                storageMonitor.sampleAsync();
-                            }
-                        }
-                        MetricSnapshot snap = buildSnapshot(asyncNanos);
-                        metricRegistry.getHistory().append(snap);
-                        optimizationManager.evaluateConditionalModules(snap);
-                        if (alertManager != null && (snap.getAverageMspt() >= 30.0
-                                || snap.getHeapUsagePercent() >= 70.0
-                                || snap.getPostGcHeapUsagePercent() >= 70.0
-                                || snap.getProcessCpuLoadPercent() >= 75.0
-                                || snap.getRecentGcPauseRateMsPerSec() >= 40.0)) {
-                            DiagnosticCoordinator.DiagnosticEvaluation eval = runDiagnostics(true);
-                            if (eval != null) {
-                                alertManager.processFindings(eval.getFindings());
-                            }
-                        }
+                // World inspection rides on this timer instead of a modulo check inside a per-tick task
+                worldTicksSinceSample += sysInterval;
+                if (worldTicksSinceSample >= optimizationManager.getEffectiveWorldSampleIntervalTicks()) {
+                    worldTicksSinceSample = 0;
+                    chunkMonitor.sampleMainThread(nowNanos);
+                    entityMonitor.sampleMainThread(nowNanos);
+                }
+
+                // Task inspection, aggregation, and snapshot assembly run off the server thread. If the previous
+                // cycle is still running (saturated CPU), skip rather than queue up redundant work.
+                if (asyncSnapshotInFlight.compareAndSet(false, true)) {
+                    if (!scheduler.runAsync(asyncSnapshotTask)) {
+                        asyncSnapshotInFlight.set(false);
                     }
-                });
+                } else {
+                    skippedAsyncSnapshots.incrementAndGet();
+                }
             }
         }, sysInterval, sysInterval);
 
@@ -291,6 +296,79 @@ public final class PerformanceEngine implements EngineLifecycle {
         }
     }
 
+    private void startPerTickSampler(final int tickInterval) {
+        this.tickSamplerHandle = scheduler.runGlobalTimer(new Runnable() {
+            @Override
+            public void run() {
+                tickMonitor.onServerTick(tickInterval);
+            }
+        }, 1L, tickInterval);
+    }
+
+    /**
+     * Falls back to the scheduler-based tick sampler if a registered ServerTickEndEvent hook never fires
+     * (e.g. a fork that ships the class but does not call the event). Runs on the main/global thread.
+     */
+    private void verifyTickEventSource(int tickInterval) {
+        PaperTickEventHook hook = this.tickEventHook;
+        if (hook == null || tickSamplerHandle != null) {
+            return;
+        }
+        long observed = tickMonitor.getTickEventCount();
+        if (observed != lastObservedTickEvents) {
+            lastObservedTickEvents = observed;
+            samplesWithoutTickEvents = 0;
+            return;
+        }
+        if (++samplesWithoutTickEvents >= TICK_EVENT_GRACE_SAMPLES) {
+            hook.unregister();
+            this.tickEventHook = null;
+            startPerTickSampler(tickInterval);
+            logger.info("[OptimizeServer] ServerTickEndEvent is not being fired on this server; switched to scheduler-based tick sampling.");
+        }
+    }
+
+    private void publishAsyncSnapshot(long bgIntervalMs) {
+        long asyncNanos = System.nanoTime();
+        // BukkitScheduler task enumeration is thread-safe and can be O(n^2) in queued tasks, so keep it off the tick thread
+        taskMonitor.sample();
+        tickMonitor.refreshAggregates(asyncNanos);
+        cpuMonitor.sample(asyncNanos);
+        memoryMonitor.sample(asyncNanos);
+        if (optimizationManager.isTaskBatchingEnabled()) {
+            long nowMs = System.currentTimeMillis();
+            long lastMs = lastStorageSampleMillis.get();
+            if ((nowMs - lastMs) >= bgIntervalMs
+                    && lastStorageSampleMillis.compareAndSet(lastMs, nowMs)) {
+                storageMonitor.sampleAsync();
+            }
+        }
+        MetricSnapshot snap = buildSnapshot(asyncNanos);
+        metricRegistry.getHistory().append(snap);
+        optimizationManager.evaluateConditionalModules(snap);
+        if (alertManager != null && (snap.getAverageMspt() >= 30.0
+                || snap.getHeapUsagePercent() >= 70.0
+                || snap.getPostGcHeapUsagePercent() >= 70.0
+                || snap.getProcessCpuLoadPercent() >= 75.0
+                || snap.getRecentGcPauseRateMsPerSec() >= 40.0)) {
+            DiagnosticCoordinator.DiagnosticEvaluation eval = runDiagnostics(true);
+            if (eval != null) {
+                alertManager.processFindings(eval.getFindings());
+            }
+        }
+    }
+
+    /**
+     * True when tick durations come from Paper's ServerTickEndEvent rather than a scheduler task.
+     */
+    public boolean isUsingPaperTickEvents() {
+        return tickEventHook != null;
+    }
+
+    public long getSkippedAsyncSnapshots() {
+        return skippedAsyncSnapshots.get();
+    }
+
     private String resolvePluginVersion() {
         if (plugin != null) {
             try {
@@ -300,7 +378,7 @@ public final class PerformanceEngine implements EngineLifecycle {
             } catch (Throwable ignored) {
             }
         }
-        return "1.2.0";
+        return "1.3.0";
     }
 
     /**
@@ -413,6 +491,11 @@ public final class PerformanceEngine implements EngineLifecycle {
             return;
         }
         this.state = EngineState.STOPPING;
+        PaperTickEventHook hook = this.tickEventHook;
+        if (hook != null) {
+            hook.unregister();
+            this.tickEventHook = null;
+        }
         if (tickSamplerHandle != null) tickSamplerHandle.cancel();
         if (systemSamplerHandle != null) systemSamplerHandle.cancel();
         if (asyncBackgroundHandle != null) asyncBackgroundHandle.cancel();

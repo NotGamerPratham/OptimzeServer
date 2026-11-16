@@ -3,17 +3,24 @@ package com.pratham.optimizeserver.monitoring;
 import com.pratham.optimizeserver.compatibility.PlatformCapabilities;
 import com.pratham.optimizeserver.metrics.MetricRegistry;
 import com.pratham.optimizeserver.metrics.RollingWindow;
+import com.pratham.optimizeserver.metrics.TickDurationRing;
 import org.bukkit.Server;
 
 import java.lang.reflect.Method;
 
 /**
  * Monitors server tick durations (MSPT) and Ticks Per Second (TPS) across 5s, 30s, 1m, 5m, and 15m rolling windows.
- * Uses monotonic time (System.nanoTime()) and integrates with Paper's native tick time arrays when available.
+ *
+ * <p>Measurement sources, best first:</p>
+ * <ol>
+ *     <li>Paper's {@code ServerTickEndEvent} (see {@link PaperTickEventHook}): the server's own exact
+ *     per-tick work duration, delivered once per tick with no scheduler task, reflection array copy, or allocation.</li>
+ *     <li>A per-tick scheduler task reading Paper's {@code getAverageTickTime()} / {@code getTickTimes()}.</li>
+ *     <li>A monotonic {@code System.nanoTime()} tick-interval measurement (Spigot/CraftBukkit).</li>
+ * </ol>
+ * All durations land in one {@link TickDurationRing}, so every window is served from a single write per tick.
  */
 public final class TickMonitor {
-
-    private static final long IDEAL_TICK_NANOS = 50_000_000L; // 50ms
 
     private final Server server;
     private final MetricRegistry metricRegistry;
@@ -21,11 +28,12 @@ public final class TickMonitor {
     private final boolean hasPaperMspt;
     private final boolean hasPaperTickTimes;
 
-    private Method getTpsMethod;
-    private Method getAverageTickTimeMethod;
-    private Method getTickTimesMethod;
+    private volatile Method getTpsMethod;
+    private volatile Method getAverageTickTimeMethod;
+    private volatile Method getTickTimesMethod;
 
     private long lastTickNanos = 0L;
+    private volatile long tickEventCount = 0L;
     private volatile double latestTps5s = 20.0;
     private volatile double latestTps30s = 20.0;
     private volatile double latestTps1m = 20.0;
@@ -68,7 +76,25 @@ public final class TickMonitor {
     }
 
     /**
-     * Invoked on every server tick (or configured tick interval) to record monotonic tick duration.
+     * Records the exact work duration of one completed server tick, as reported by Paper's
+     * {@code ServerTickEndEvent}. Called on the server tick thread once per tick.
+     */
+    public void recordTickEndEvent(double tickDurationMs, long nowNanos) {
+        metricRegistry.recordTickDurationMs(Math.max(0.0, tickDurationMs), nowNanos);
+        tickEventCount++;
+        lastTickNanos = nowNanos;
+    }
+
+    /**
+     * Number of ticks delivered through {@link #recordTickEndEvent(double, long)}.
+     */
+    public long getTickEventCount() {
+        return tickEventCount;
+    }
+
+    /**
+     * Fallback path, invoked from a scheduler task on every server tick (or configured tick interval)
+     * when no native tick-end event is available.
      */
     public void onServerTick(int intervalTicks) {
         long nowNanos = System.nanoTime();
@@ -94,35 +120,36 @@ public final class TickMonitor {
 
     /**
      * Recomputes rolling window statistics for 5s, 30s, 1m, 5m, and 15m windows.
+     * Averages are O(log n); only the 1m window is sorted for percentiles.
      */
     public void refreshAggregates(long nowNanos) {
-        RollingWindow.WindowAverage avg5s = metricRegistry.getMspt5s().computeAverage(nowNanos);
+        TickDurationRing ring = metricRegistry.getTickRing();
+        RollingWindow.WindowAverage avg5s = ring.computeAverage(MetricRegistry.WINDOW_5S_NANOS, nowNanos);
         if (avg5s.getSampleCount() == 0 && (hasPaperTickTimes || hasPaperMspt)) {
             double seededMspt = readNativeTickDurationMs(-1.0);
             if (seededMspt > 0.0) {
                 metricRegistry.recordTickDurationMs(seededMspt, nowNanos);
-                avg5s = metricRegistry.getMspt5s().computeAverage(nowNanos);
+                avg5s = ring.computeAverage(MetricRegistry.WINDOW_5S_NANOS, nowNanos);
             }
         }
-        RollingWindow.WindowAverage avg30s = metricRegistry.getMspt30s().computeAverage(nowNanos);
-        RollingWindow.WindowStats stats1m = metricRegistry.getMspt1m().computeStats(nowNanos);
-        RollingWindow.WindowAverage avg5m = metricRegistry.getMspt5m().computeAverage(nowNanos);
-        RollingWindow.WindowAverage avg15m = metricRegistry.getMspt15m().computeAverage(nowNanos);
+        RollingWindow.WindowAverage avg30s = ring.computeAverage(MetricRegistry.WINDOW_30S_NANOS, nowNanos);
+        RollingWindow.WindowStats stats1m = ring.computeStats(MetricRegistry.WINDOW_1M_NANOS, nowNanos);
+        RollingWindow.WindowAverage avg5m = ring.computeAverage(MetricRegistry.WINDOW_5M_NANOS, nowNanos);
+        RollingWindow.WindowAverage avg15m = ring.computeAverage(MetricRegistry.WINDOW_15M_NANOS, nowNanos);
 
-        this.latestMsptStats = stats1m.getSampleCount() > 0
-                ? stats1m
-                : metricRegistry.getMspt5s().computeStats(nowNanos);
+        this.latestMsptStats = stats1m;
 
         this.latestTps5s = msptToTps(avg5s.getSampleCount(), avg5s.getAverage());
         this.latestTps30s = msptToTps(avg30s.getSampleCount(), avg30s.getAverage());
-        this.latestTps1m = msptToTps(stats1m);
+        this.latestTps1m = msptToTps(stats1m.getSampleCount(), stats1m.getAverage());
         this.latestTps5m = msptToTps(avg5m.getSampleCount(), avg5m.getAverage());
         this.latestTps15m = msptToTps(avg15m.getSampleCount(), avg15m.getAverage());
 
         // Cross-check 1m, 5m, 15m with native Paper TPS array if available and rolling window is still warming up
-        if (getTpsMethod != null && server != null) {
+        Method tpsMethod = this.getTpsMethod;
+        if (tpsMethod != null && server != null) {
             try {
-                Object raw = getTpsMethod.invoke(server);
+                Object raw = tpsMethod.invoke(server);
                 if (raw instanceof double[]) {
                     double[] nativeTps = (double[]) raw;
                     if (nativeTps.length >= 3) {
@@ -138,36 +165,18 @@ public final class TickMonitor {
                     }
                 }
             } catch (Throwable ignored) {
+                // Unsupported on this fork (e.g. some region-threaded builds): stop paying for the exception
+                this.getTpsMethod = null;
             }
         }
     }
 
     private double readNativeTickDurationMs(double fallbackIntervalMs) {
-        if (getTickTimesMethod != null && server != null) {
+        // getAverageTickTime() returns a primitive with no array copy, so it is preferred over getTickTimes()
+        Method avgMethod = this.getAverageTickTimeMethod;
+        if (avgMethod != null && server != null) {
             try {
-                Object raw = getTickTimesMethod.invoke(server);
-                if (raw instanceof long[]) {
-                    long[] tickTimes = (long[]) raw;
-                    if (tickTimes.length > 0) {
-                        long sum = 0L;
-                        int count = 0;
-                        for (int i = 0; i < Math.min(20, tickTimes.length); i++) {
-                            if (tickTimes[i] > 0L) {
-                                sum += tickTimes[i];
-                                count++;
-                            }
-                        }
-                        if (count > 0) {
-                            return (sum / (double) count) / 1_000_000.0;
-                        }
-                    }
-                }
-            } catch (Throwable ignored) {
-            }
-        }
-        if (getAverageTickTimeMethod != null && server != null) {
-            try {
-                Object raw = getAverageTickTimeMethod.invoke(server);
+                Object raw = avgMethod.invoke(server);
                 if (raw instanceof Number) {
                     double nativeMspt = ((Number) raw).doubleValue();
                     if (nativeMspt > 0.0) {
@@ -175,17 +184,33 @@ public final class TickMonitor {
                     }
                 }
             } catch (Throwable ignored) {
+                this.getAverageTickTimeMethod = null;
+            }
+        }
+        Method timesMethod = this.getTickTimesMethod;
+        if (timesMethod != null && server != null) {
+            try {
+                Object raw = timesMethod.invoke(server);
+                if (raw instanceof long[]) {
+                    long[] tickTimes = (long[]) raw;
+                    long sum = 0L;
+                    int count = 0;
+                    for (int i = 0; i < Math.min(20, tickTimes.length); i++) {
+                        if (tickTimes[i] > 0L) {
+                            sum += tickTimes[i];
+                            count++;
+                        }
+                    }
+                    if (count > 0) {
+                        return (sum / (double) count) / 1_000_000.0;
+                    }
+                }
+            } catch (Throwable ignored) {
+                this.getTickTimesMethod = null;
             }
         }
         // Fallback: if interval is close to 50ms, preserve measured interval; subtracted sleep yields work estimate
         return Math.max(0.1, fallbackIntervalMs);
-    }
-
-    private static double msptToTps(RollingWindow.WindowStats stats) {
-        if (stats == null) {
-            return 20.0;
-        }
-        return msptToTps(stats.getSampleCount(), stats.getAverage());
     }
 
     private static double msptToTps(int sampleCount, double avgMspt) {
@@ -226,4 +251,3 @@ public final class TickMonitor {
         return latestMsptStats;
     }
 }
-
