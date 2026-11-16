@@ -316,12 +316,22 @@ public final class ServerConfigAuditor {
         if (jvm == null) {
             return;
         }
-        if (!jvm.hasMatchingXmsXmx()) {
+        long safeHeapMb = resolveSafeHeapTargetMb(heapMaxMb, jvm);
+        double maxRamPct = jvm.getMaxRamPercentage();
+        if (maxRamPct >= 82.0 || (safeHeapMb < heapMaxMb && jvm.hasContainerRamFlags())) {
+            out.add(new TuningSuggestion(
+                    "startup-flags",
+                    "-XX:MaxRAMPercentage / Container Heap",
+                    (maxRamPct > 0 ? ("MaxRAMPercentage=" + maxRamPct + "% (heap ~" + heapMaxMb + "M)") : (heapMaxMb + "M")),
+                    "-Xms" + safeHeapMb + "M -Xmx" + safeHeapMb + "M (WITHOUT -XX:+AlwaysPreTouch inside tight containers)",
+                    "Leaving 20-25% (~1.5-2 GB) below container limit prevents Docker/Pterodactyl Linux OOM-killer crashes (Exit 137) caused by Metaspace, G1 native sets, and Netty buffers."
+            ));
+        } else if (!jvm.hasMatchingXmsXmx()) {
             out.add(new TuningSuggestion(
                     "startup-flags",
                     "-Xms / -Xmx",
                     "Mismatched or unset",
-                    "-Xms" + heapMaxMb + "M -Xmx" + heapMaxMb + "M",
+                    "-Xms" + safeHeapMb + "M -Xmx" + safeHeapMb + "M",
                     "Prevents runtime heap resizing pauses and OS page faults."
             ));
         }
@@ -334,7 +344,7 @@ public final class ServerConfigAuditor {
                     "Stops plugins or libraries from triggering stop-the-world Full GC via System.gc()."
             ));
         }
-        if (jvm.hasMatchingXmsXmx() && !jvm.getJvmArguments().contains("-XX:+AlwaysPreTouch")) {
+        if (jvm.hasMatchingXmsXmx() && !jvm.hasContainerRamFlags() && !jvm.getJvmArguments().contains("-XX:+AlwaysPreTouch")) {
             out.add(new TuningSuggestion(
                     "startup-flags",
                     "-XX:+AlwaysPreTouch",
@@ -348,7 +358,7 @@ public final class ServerConfigAuditor {
                     "startup-flags",
                     "Garbage Collector",
                     String.valueOf(jvm.getCollectorNames()),
-                    heapMaxMb >= 14336L && jvm.getFeatureVersion() >= 21 ? "-XX:+UseZGC -XX:+ZGenerational" : "-XX:+UseG1GC",
+                    safeHeapMb >= 14336L && jvm.getFeatureVersion() >= 21 ? "-XX:+UseZGC -XX:+ZGenerational" : "-XX:+UseG1GC",
                     "Reduces long stop-the-world tick freezes under entity and chunk allocation churn."
             ));
         }
@@ -464,7 +474,7 @@ public final class ServerConfigAuditor {
             ));
         }
         int nettyThreads = spigot.getInt("settings.netty-threads", 4);
-        if (cores <= 2 && nettyThreads > 4) {
+        if (cores <= 2 && nettyThreads > 2) {
             out.add(new TuningSuggestion(
                     "spigot.yml",
                     "settings.netty-threads",
@@ -520,25 +530,58 @@ public final class ServerConfigAuditor {
         }
     }
 
+    public static long resolveSafeHeapTargetMb(long heapMaxMb, JavaRuntimeInfo jvm) {
+        long clamped = Math.max(512L, heapMaxMb);
+        if (jvm == null) {
+            return clamped;
+        }
+        long containerOrHostMb = -1L;
+        double maxRamPct = jvm.getMaxRamPercentage();
+        if (maxRamPct > 0.0 && maxRamPct <= 100.0) {
+            containerOrHostMb = Math.round(clamped / (maxRamPct / 100.0));
+        }
+        long detectedMb = jvm.detectContainerOrSystemMemoryMb();
+        if (detectedMb > 0L && (containerOrHostMb <= 0L || detectedMb < containerOrHostMb)) {
+            containerOrHostMb = detectedMb;
+        }
+
+        boolean riskContainerOom = jvm.hasContainerRamFlags()
+                || (containerOrHostMb >= 4096L && (containerOrHostMb - clamped) < 1536L)
+                || (containerOrHostMb > 0L && clamped > Math.round(containerOrHostMb * 0.85));
+        if (!riskContainerOom || containerOrHostMb <= 0L) {
+            return clamped;
+        }
+
+        long reserveMb = containerOrHostMb >= 6144L
+                ? Math.max(2048L, Math.round(containerOrHostMb * 0.25))
+                : (containerOrHostMb >= 3072L ? 1024L : 384L);
+        long safe = Math.max(512L, containerOrHostMb - reserveMb);
+        // Round down cleanly to 128 MB boundary for readable flags
+        safe = Math.max(512L, (safe / 128L) * 128L);
+        return Math.min(clamped, safe);
+    }
+
     public static String buildRecommendedJvmCommand(long heapMaxMb, JavaRuntimeInfo jvm) {
-        long clampedHeapMb = Math.max(512L, heapMaxMb);
+        long clampedHeapMb = resolveSafeHeapTargetMb(heapMaxMb, jvm);
         int javaVer = jvm != null ? jvm.getFeatureVersion() : 17;
+        boolean containerManaged = jvm != null && jvm.hasContainerRamFlags();
+        String preTouchFlag = containerManaged ? "" : "-XX:+AlwaysPreTouch ";
 
         if (clampedHeapMb >= 14336L && javaVer >= 21) {
             return "java -Xms" + clampedHeapMb + "M -Xmx" + clampedHeapMb + "M "
-                    + "-XX:+UseZGC -XX:+ZGenerational -XX:+AlwaysPreTouch -XX:+DisableExplicitGC -jar server.jar --nogui";
+                    + "-XX:+UseZGC -XX:+ZGenerational " + preTouchFlag + "-XX:+DisableExplicitGC -jar server.jar --nogui";
         }
         if (clampedHeapMb <= 1536L) {
             // Tuned specifically for small heaps: avoids Aikar's 30% NewSizePercent starving OldGen under <1.5GB
             return "java -Xms" + clampedHeapMb + "M -Xmx" + clampedHeapMb + "M "
                     + "-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=100 "
-                    + "-XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch "
+                    + "-XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC " + preTouchFlag
                     + "-XX:G1HeapRegionSize=4M -XX:G1ReservePercent=15 -XX:InitiatingHeapOccupancyPercent=25 "
                     + "-jar server.jar --nogui";
         }
         return "java -Xms" + clampedHeapMb + "M -Xmx" + clampedHeapMb + "M "
                 + "-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=130 "
-                + "-XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch "
+                + "-XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC " + preTouchFlag
                 + "-XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M "
                 + "-XX:G1ReservePercent=20 -XX:InitiatingHeapOccupancyPercent=15 -jar server.jar --nogui";
     }

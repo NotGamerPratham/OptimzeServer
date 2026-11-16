@@ -168,4 +168,55 @@ public final class JavaRuntimeInfo {
         }
         return xms != null && xms.equalsIgnoreCase(xmx);
     }
+
+    public boolean hasContainerRamFlags() {
+        for (String arg : jvmArguments) {
+            if (arg.startsWith("-XX:MaxRAMPercentage=")
+                    || arg.startsWith("-XX:InitialRAMPercentage=")
+                    || arg.startsWith("-XX:MinRAMPercentage=")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public double getMaxRamPercentage() {
+        for (String arg : jvmArguments) {
+            if (arg.startsWith("-XX:MaxRAMPercentage=")) {
+                try {
+                    return Double.parseDouble(arg.substring("-XX:MaxRAMPercentage=".length()).trim());
+                } catch (NumberFormatException ignored) {
+                }
+            }
+        }
+        return -1.0;
+    }
+
+    /**
+     * Best-effort detection of container cgroup memory limit (Java 14+) or physical host RAM in MB.
+     * Returns -1 when unavailable.
+     */
+    public long detectContainerOrSystemMemoryMb() {
+        try {
+            Object osBean = ManagementFactory.getOperatingSystemMXBean();
+            if (osBean != null) {
+                for (String methodName : new String[]{"getTotalMemorySize", "getTotalPhysicalMemorySize"}) {
+                    try {
+                        java.lang.reflect.Method m = osBean.getClass().getMethod(methodName);
+                        m.setAccessible(true);
+                        Object raw = m.invoke(osBean);
+                        if (raw instanceof Number) {
+                            long bytes = ((Number) raw).longValue();
+                            if (bytes > 0L) {
+                                return bytes / (1024L * 1024L);
+                            }
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return -1L;
+    }
 }

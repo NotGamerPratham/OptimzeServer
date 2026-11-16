@@ -145,7 +145,8 @@ public final class PerformanceEngine implements EngineLifecycle {
                 server,
                 compatReport.getPlatform(),
                 compatReport.getCapabilities(),
-                workerPool
+                workerPool,
+                logger
         );
 
         int maxSnapshots = configManager != null ? configManager.getInt("monitoring.retention.max-snapshots", 900) : 900;

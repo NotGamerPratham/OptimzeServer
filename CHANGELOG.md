@@ -2,6 +2,15 @@
 
 All notable changes to **OptimizeServer** will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- Added container-safe heap reservation (`resolveSafeHeapTargetMb`) for `-XX:MaxRAMPercentage` / Pterodactyl / Docker hosts (reserving 20-25% off-heap headroom and omitting `-XX:+AlwaysPreTouch` inside container-managed heaps to prevent cgroup Exit 137 OOM kills) and `settings.netty-threads` 2-core auditing.
+- **Console logger formatting:** Wrapped Bukkit/Paper `PluginLogger` in `OptimizeServer` to strip redundant `[OptimizeServer]` / normalize `[OptimizeServer Alert]` prefixes so console lines never print `[OptimizeServer] [OptimizeServer]`.
+
+### Changed
+- The automatic MSPT regression rollback now needs `optimization.regression-rollback-streak` consecutive severe samples (default `12`, minimum `3`) instead of a fixed 3, so brief spikes no longer roll back conditional modules.
+
 ## [1.3.0] - 2026-11-16
 
 ### Changed

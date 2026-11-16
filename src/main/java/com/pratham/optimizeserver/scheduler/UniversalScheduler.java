@@ -47,9 +47,20 @@ public final class UniversalScheduler implements SchedulerAdapter {
                               ServerPlatform platform,
                               PlatformCapabilities capabilities,
                               BoundedWorkerPool workerPool) {
+        this(plugin, server, platform, capabilities, workerPool, null);
+    }
+
+    public UniversalScheduler(Plugin plugin,
+                              Server server,
+                              ServerPlatform platform,
+                              PlatformCapabilities capabilities,
+                              BoundedWorkerPool workerPool,
+                              Logger logger) {
         this.plugin = plugin;
         this.server = server;
-        this.logger = plugin != null ? plugin.getLogger() : Logger.getLogger("OptimizeServer");
+        this.logger = logger != null
+                ? logger
+                : (plugin != null ? plugin.getLogger() : Logger.getLogger("OptimizeServer"));
         this.workerPool = workerPool;
         boolean wantFolia = platform != null && platform.isRegionThreaded()
                 && capabilities != null && capabilities.hasFoliaRegionSchedulers();

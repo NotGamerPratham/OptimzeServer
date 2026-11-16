@@ -9,6 +9,8 @@ import org.bukkit.plugin.PluginManager;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 /**
  * Main plugin entrypoint for OptimizeServer.
@@ -16,6 +18,7 @@ import java.util.logging.Level;
  */
 public final class OptimizeServer extends JavaPlugin {
 
+    private Logger pluginLogger;
     private ConfigManager configManager;
     private PerformanceEngine performanceEngine;
     private ServerActivityListener activityListener;
@@ -23,13 +26,14 @@ public final class OptimizeServer extends JavaPlugin {
     @Override
     public void onEnable() {
         long startMillis = System.currentTimeMillis();
+        Logger log = getCleanLogger();
         try {
             saveDefaultConfig();
-            this.configManager = new ConfigManager(this, getConfig(), getLogger());
+            this.configManager = new ConfigManager(this, getConfig(), log);
             this.configManager.loadAndValidate();
 
             if (!configManager.getBoolean("general.enabled", true)) {
-                getLogger().info("[OptimizeServer] Plugin is disabled in config.yml (general.enabled=false).");
+                log.info("Plugin is disabled in config.yml (general.enabled=false).");
                 return;
             }
 
@@ -37,7 +41,7 @@ public final class OptimizeServer extends JavaPlugin {
                     this,
                     getServer(),
                     getDataFolder(),
-                    getLogger(),
+                    log,
                     this.configManager
             );
             this.performanceEngine.start();
@@ -61,18 +65,19 @@ public final class OptimizeServer extends JavaPlugin {
             }
 
             long elapsed = System.currentTimeMillis() - startMillis;
-            getLogger().info("[OptimizeServer] Enabled successfully in " + elapsed + " ms ("
+            log.info("Enabled successfully in " + elapsed + " ms ("
                     + performanceEngine.getCompatibilityManager().getPlatform().getDisplayName()
                     + " MC " + performanceEngine.getCompatibilityManager().getMinecraftVersion().toShortString()
                     + ", State=" + performanceEngine.getState().name() + ").");
         } catch (Throwable t) {
-            getLogger().log(Level.SEVERE, "[OptimizeServer] Critical error during plugin startup; entering safe shutdown.", t);
+            log.log(Level.SEVERE, "Critical error during plugin startup; entering safe shutdown.", t);
             onDisable();
         }
     }
 
     @Override
     public void onDisable() {
+        Logger log = getCleanLogger();
         try {
             if (activityListener != null) {
                 activityListener.setActive(false);
@@ -80,10 +85,54 @@ public final class OptimizeServer extends JavaPlugin {
             if (performanceEngine != null) {
                 performanceEngine.stop();
             }
-            getLogger().info("[OptimizeServer] Disabled cleanly.");
+            log.info("Disabled cleanly.");
         } catch (Throwable t) {
-            getLogger().log(Level.WARNING, "[OptimizeServer] Exception while shutting down PerformanceEngine", t);
+            log.log(Level.WARNING, "Exception while shutting down PerformanceEngine", t);
         }
+    }
+
+    private Logger getCleanLogger() {
+        if (this.pluginLogger == null) {
+            this.pluginLogger = createCleanPluginLogger(getLogger());
+        }
+        return this.pluginLogger;
+    }
+
+    /**
+     * Wraps Bukkit/Paper's PluginLogger (which already prepends "[OptimizeServer] ")
+     * so internal prefixes like "[OptimizeServer] " or "[OptimizeServer Alert] " are not duplicated.
+     */
+    static Logger createCleanPluginLogger(final Logger delegate) {
+        if (delegate == null) {
+            return Logger.getLogger("OptimizeServer");
+        }
+        return new Logger(delegate.getName(), null) {
+            @Override
+            public boolean isLoggable(Level level) {
+                return delegate.isLoggable(level);
+            }
+
+            @Override
+            public Level getLevel() {
+                return delegate.getLevel();
+            }
+
+            @Override
+            public void log(LogRecord record) {
+                if (record == null || !delegate.isLoggable(record.getLevel())) {
+                    return;
+                }
+                String msg = record.getMessage();
+                if (msg != null) {
+                    if (msg.startsWith("[OptimizeServer] ")) {
+                        record.setMessage(msg.substring("[OptimizeServer] ".length()));
+                    } else if (msg.startsWith("[OptimizeServer Alert] ")) {
+                        record.setMessage("[Alert] " + msg.substring("[OptimizeServer Alert] ".length()));
+                    }
+                }
+                delegate.log(record);
+            }
+        };
     }
 
     public PerformanceEngine getPerformanceEngine() {

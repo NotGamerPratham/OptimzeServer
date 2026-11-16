@@ -103,6 +103,8 @@ optimization:
   mode: HYBRID_CONDITIONAL
   validate-before-activation: true
   auto-rollback-on-regression: true
+  # Consecutive severe MSPT regression samples (~1s each) required before rolling back conditional modules
+  regression-rollback-streak: 12
   modules:
     # Automatic Safe Optimizations (Internal plugin execution efficiency)
     config-lookup-cache:

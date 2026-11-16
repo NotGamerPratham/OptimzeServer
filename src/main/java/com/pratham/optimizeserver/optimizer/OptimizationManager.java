@@ -752,17 +752,18 @@ public final class OptimizationManager {
             return;
         }
 
-        // Only roll back conditional tuning after 3 consecutive severe MSPT regressions above baseline
+        // Roll back conditional tuning only after sustained consecutive severe MSPT regressions above baseline
+        int threshold = getRegressionRollbackStreakThreshold();
         if (currentMspt >= 75.0 && (currentMspt - baselineMspt) >= 25.0) {
             int streak = regressionStreak.incrementAndGet();
-            if (streak >= 3) {
+            if (streak >= threshold) {
                 int rolledBack = 0;
                 for (OptimizationModule mod : registry.getActiveModules()) {
                     if (mod != null && mod.getCategory() == OptimizationCategory.CONDITIONAL) {
                         if (rollbackManager.rollbackModule(mod,
                                 String.format(Locale.ROOT,
-                                        "Automatic regression safeguard: MSPT=%.2fms vs baseline=%.2fms",
-                                        currentMspt, baselineMspt))) {
+                                        "Automatic regression safeguard (%d consecutive samples): MSPT=%.2fms vs baseline=%.2fms",
+                                        streak, currentMspt, baselineMspt))) {
                             rolledBack++;
                         }
                     }
@@ -770,6 +771,7 @@ public final class OptimizationManager {
                 if (rolledBack > 0 && logger != null) {
                     logger.warning("[OptimizeServer] Auto-rolled back " + rolledBack
                             + " conditional module(s) after sustained MSPT regression ("
+                            + streak + " samples, "
                             + String.format(Locale.ROOT, "%.2fms vs baseline %.2fms", currentMspt, baselineMspt) + ").");
                 }
                 regressionStreak.set(0);
@@ -887,6 +889,10 @@ public final class OptimizationManager {
 
     public boolean isAutoRollbackOnRegressionEnabled() {
         return configManager == null || configManager.getBoolean("optimization.auto-rollback-on-regression", true);
+    }
+
+    public int getRegressionRollbackStreakThreshold() {
+        return configManager != null ? Math.max(3, configManager.getInt("optimization.regression-rollback-streak", 12)) : 12;
     }
 
     public int getRegressionStreak() {

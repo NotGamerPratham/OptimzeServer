@@ -12,6 +12,10 @@ import com.pratham.optimizeserver.analyzer.ServerConfigAuditor;
 import com.pratham.optimizeserver.analyzer.Severity;
 import com.pratham.optimizeserver.analyzer.TrendAnalyzer;
 import com.pratham.optimizeserver.compatibility.CompatibilityManager;
+import com.pratham.optimizeserver.compatibility.CompatibilityReport;
+import com.pratham.optimizeserver.compatibility.JavaRuntimeInfo;
+import com.pratham.optimizeserver.compatibility.MinecraftVersion;
+import com.pratham.optimizeserver.compatibility.ServerPlatform;
 import com.pratham.optimizeserver.config.ConfigManager;
 import com.pratham.optimizeserver.metrics.MetricHistory;
 import com.pratham.optimizeserver.metrics.MetricSnapshot;
@@ -240,7 +244,7 @@ public class DiagnosticIntelligenceTest {
         writeUtf8(new File(serverRoot, "bukkit.yml"),
                 "chunk-gc:\n  period-in-ticks: 600\nticks-per:\n  autosave: 1200\n");
         writeUtf8(new File(serverRoot, "spigot.yml"),
-                "settings:\n  save-user-cache-on-stop-only: false\n  netty-threads: 8\n");
+                "settings:\n  save-user-cache-on-stop-only: false\n  netty-threads: 4\n");
         writeUtf8(new File(configDir, "paper-world-defaults.yml"),
                 "chunks:\n  max-auto-save-chunks-per-tick: 24\n  prevent-moving-into-unloaded-chunks: false\n");
 
@@ -268,6 +272,79 @@ public class DiagnosticIntelligenceTest {
         }
         assertNotNull(audit.getRecommendedJvmCommand());
         assertTrue(audit.getRecommendedJvmCommand().contains("UseG1GC"));
+        boolean foundNetty2CoreFix = false;
+        for (ServerConfigAuditor.TuningSuggestion s : audit.getSuggestions()) {
+            if ("spigot.yml".equals(s.getFile()) && "settings.netty-threads".equals(s.getKey())
+                    && "2".equals(s.getRecommendedValue())) {
+                foundNetty2CoreFix = true;
+                break;
+            }
+        }
+        assertTrue(foundNetty2CoreFix, "Expected netty-threads: 4 on 2 cores to recommend 2");
+
+        // Pterodactyl / Docker container safety: -XX:MaxRAMPercentage=95.0 on ~8.6 GB container (8172M heap)
+        JavaRuntimeInfo containerJvm = new JavaRuntimeInfo(
+                "25.0.5",
+                25,
+                "OpenJDK 64-Bit Server VM",
+                "Eclipse Adoptium",
+                2,
+                Arrays.asList("-Xms128M", "-XX:MaxRAMPercentage=95.0"),
+                Collections.singletonList("G1 Young Generation")
+        );
+        CompatibilityReport containerCompat = new CompatibilityReport(
+                ServerPlatform.PAPER,
+                MinecraftVersion.parse("git-Paper-130 (MC: 1.21.1)", "1.21.1-R0.1-SNAPSHOT"),
+                containerJvm,
+                cm.getReport().getCapabilities(),
+                false,
+                Collections.<String>emptyList(),
+                Collections.<String>emptyList()
+        );
+        long safeContainerHeap = ServerConfigAuditor.resolveSafeHeapTargetMb(8172L, containerJvm);
+        assertTrue(safeContainerHeap <= 6656L && safeContainerHeap >= 5120L,
+                "Expected safe container heap <= 6656M, got " + safeContainerHeap);
+
+        MetricSnapshot containerSnapshot = MetricSnapshot.builder()
+                .heapMaxBytes(8172L * 1024L * 1024L)
+                .heapUsedBytes(3000L * 1024L * 1024L)
+                .availableProcessors(2)
+                .build();
+        ServerConfigAuditor.AuditReport containerAudit = auditor.audit(
+                serverRoot, paperServer, containerCompat, containerSnapshot);
+        assertFalse(containerAudit.getRecommendedJvmCommand().contains("-XX:+AlwaysPreTouch"));
+        assertFalse(containerAudit.getRecommendedJvmCommand().contains("-Xms8172M"));
+        assertTrue(containerAudit.getRecommendedJvmCommand().contains("-Xms" + safeContainerHeap + "M -Xmx" + safeContainerHeap + "M"));
+
+        boolean foundContainerWarning = false;
+        for (ServerConfigAuditor.TuningSuggestion s : containerAudit.getSuggestions()) {
+            if ("startup-flags".equals(s.getFile()) && s.getKey().contains("MaxRAMPercentage")) {
+                foundContainerWarning = true;
+                break;
+            }
+        }
+        assertTrue(foundContainerWarning, "Expected Exit 137 MaxRAMPercentage warning suggestion");
+
+        RecommendationEngine recEngine = new RecommendationEngine();
+        EvidenceCollector.EvidenceBundle containerBundle = new EvidenceCollector.EvidenceBundle(
+                containerSnapshot,
+                Collections.singletonList(containerSnapshot),
+                Collections.<String, Integer>emptyMap(),
+                Collections.<String, Integer>emptyMap(),
+                containerCompat
+        );
+        List<RecommendationEngine.InfrastructureRecommendation> containerRecs = recEngine.generateRecommendations(
+                containerBundle, Collections.<DiagnosticFinding>emptyList());
+        boolean hasSafeContainerAdvice = false;
+        for (RecommendationEngine.InfrastructureRecommendation rec : containerRecs) {
+            if ("Heap Configuration".equals(rec.getDomain()) && rec.getActionItem().contains("-Xms" + safeContainerHeap + "M")) {
+                hasSafeContainerAdvice = true;
+            }
+            if ("JVM Arguments".equals(rec.getDomain()) && rec.getActionItem().contains("DisableExplicitGC")) {
+                assertTrue(rec.getActionItem().contains("omit -XX:+AlwaysPreTouch"));
+            }
+        }
+        assertTrue(hasSafeContainerAdvice, "Expected container heap recommendation in RecommendationEngine");
 
         ServerConfigAuditor.CapacityAssessment overloadCap = auditor.evaluateCapacity(oneGbSnapshot, cm.getReport(), 50);
         assertEquals(ServerConfigAuditor.CapacityStatus.INSUFFICIENT_RESOURCES, overloadCap.getStatus());

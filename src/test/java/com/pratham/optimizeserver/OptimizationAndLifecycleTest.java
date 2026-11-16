@@ -23,6 +23,7 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -30,6 +31,9 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -320,32 +324,67 @@ public class OptimizationAndLifecycleTest {
         engine.start();
 
         assertTrue(engine.getOptimizationManager().isAutoRollbackOnRegressionEnabled());
+        assertEquals(12, engine.getOptimizationManager().getRegressionRollbackStreakThreshold());
         assertTrue(engine.getOptimizationManager().getRegistry().getModule("adaptive-telemetry-batcher").isEnabled());
 
         engine.getOptimizationManager().setBaselineMspt(18.0);
         MetricSnapshot spike = MetricSnapshot.builder().averageMspt(85.0).processCpuLoadPercent(50.0).build();
         MetricSnapshot recovery = MetricSnapshot.builder().averageMspt(18.0).processCpuLoadPercent(20.0).build();
 
-        // Single spike increments streak to 1 without prematurely rolling back
-        engine.getOptimizationManager().evaluateConditionalModules(spike);
-        assertEquals(1, engine.getOptimizationManager().getRegressionStreak());
+        // Brief 3-second spike bursts (e.g. player-join chunk loading) must NOT prematurely roll back conditional modules
+        for (int i = 0; i < 3; i++) {
+            engine.getOptimizationManager().evaluateConditionalModules(spike);
+        }
+        assertEquals(3, engine.getOptimizationManager().getRegressionStreak());
         assertTrue(engine.getOptimizationManager().getRegistry().getModule("adaptive-telemetry-batcher").isEnabled());
 
         // Healthy tick resets regression streak
         engine.getOptimizationManager().evaluateConditionalModules(recovery);
         assertEquals(0, engine.getOptimizationManager().getRegressionStreak());
 
-        // Three consecutive severe MSPT regressions trigger automatic rollback of conditional modules
+        // Reaching configured streak threshold (12 consecutive severe regressions) triggers automatic rollback
         int historyBefore = engine.getOptimizationManager().getRollbackManager().getHistory().size();
-        engine.getOptimizationManager().evaluateConditionalModules(spike);
-        engine.getOptimizationManager().evaluateConditionalModules(spike);
-        engine.getOptimizationManager().evaluateConditionalModules(spike);
+        for (int i = 0; i < 12; i++) {
+            engine.getOptimizationManager().evaluateConditionalModules(spike);
+        }
 
         assertEquals(0, engine.getOptimizationManager().getRegressionStreak());
         assertFalse(engine.getOptimizationManager().getRegistry().getModule("adaptive-telemetry-batcher").isEnabled());
         assertTrue(engine.getOptimizationManager().getRollbackManager().getHistory().size() > historyBefore);
 
         engine.stop();
+    }
+
+    @Test
+    public void testPluginLoggerStripsDuplicateOptimizeServerPrefix() {
+        final List<String> captured = new ArrayList<String>();
+        Logger delegate = Logger.getAnonymousLogger();
+        delegate.setUseParentHandlers(false);
+        delegate.setLevel(Level.ALL);
+        delegate.addHandler(new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                captured.add(record.getMessage());
+            }
+
+            @Override
+            public void flush() {
+            }
+
+            @Override
+            public void close() {
+            }
+        });
+
+        Logger wrapped = OptimizeServer.createCleanPluginLogger(delegate);
+        wrapped.info("[OptimizeServer] Enabled successfully in 25 ms.");
+        wrapped.warning("[OptimizeServer Alert] High MSPT");
+        wrapped.info("Plain message without redundant prefix");
+
+        assertEquals(3, captured.size());
+        assertEquals("Enabled successfully in 25 ms.", captured.get(0));
+        assertEquals("[Alert] High MSPT", captured.get(1));
+        assertEquals("Plain message without redundant prefix", captured.get(2));
     }
 
     @Test

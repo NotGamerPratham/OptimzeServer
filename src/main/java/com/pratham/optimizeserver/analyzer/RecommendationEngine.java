@@ -61,20 +61,24 @@ public final class RecommendationEngine {
                 ? (s.getHeapMaxBytes() / (1024L * 1024L))
                 : (Runtime.getRuntime().maxMemory() / (1024L * 1024L));
 
-        // 1. JVM Arguments (RAM-tier aware so small 1GB servers don't get >16GB ZGC advice)
+        // 1. JVM Arguments (RAM-tier and container aware so small/containerized servers never get OOM-inducing advice)
+        long safeHeapMb = ServerConfigAuditor.resolveSafeHeapTargetMb(heapMaxMb, jvm);
+        boolean containerManaged = jvm != null && (jvm.hasContainerRamFlags() || safeHeapMb < heapMaxMb);
         if (jvm != null) {
             if (!jvm.hasExplicitDisableExplicitGC()) {
                 list.add(new InfrastructureRecommendation(
                         "JVM Arguments",
                         "Add -XX:+DisableExplicitGC to JVM startup flags",
                         "Prevents third-party plugins or RMI timers from invoking System.gc() and causing stop-the-world tick spikes.",
-                        "Append '-XX:+DisableExplicitGC -XX:+AlwaysPreTouch' to your server startup script (run '/os tune' for full flags)."
+                        containerManaged
+                                ? "Append '-XX:+DisableExplicitGC' (omit -XX:+AlwaysPreTouch in Docker/Pterodactyl containers; run '/os tune' for safe flags)."
+                                : "Append '-XX:+DisableExplicitGC -XX:+AlwaysPreTouch' to your server startup script (run '/os tune' for full flags)."
                 ));
             }
             if (!jvm.isUsingG1GC() && !jvm.isUsingZGC()) {
-                String collectorAdvice = heapMaxMb <= 1536L
+                String collectorAdvice = safeHeapMb <= 1536L
                         ? "Use low-footprint G1GC flags (-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=100 -XX:G1HeapRegionSize=4M -XX:G1ReservePercent=15 -XX:InitiatingHeapOccupancyPercent=25)."
-                        : (heapMaxMb >= 14336L && jvm.getFeatureVersion() >= 21
+                        : (safeHeapMb >= 14336L && jvm.getFeatureVersion() >= 21
                                 ? "Use Generational ZGC (-XX:+UseZGC -XX:+ZGenerational) on Java 21+ or Aikar's G1GC flags."
                                 : "Use Aikar's G1GC flags (-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=130 -XX:G1NewSizePercent=30).");
                 list.add(new InfrastructureRecommendation(
@@ -95,13 +99,21 @@ public final class RecommendationEngine {
                     "Run Paper (drop-in compatible with Bukkit/Spigot plugins) to improve CPU and RAM efficiency without altering vanilla gameplay."
             ));
         }
-        if (jvm != null && !jvm.hasMatchingXmsXmx()) {
+        if (jvm != null && containerManaged) {
+            list.add(new InfrastructureRecommendation(
+                    "Heap Configuration",
+                    "Cap container heap below cgroup limit to prevent Exit 137 OOM kills",
+                    "Percentage-based or near-100% container heaps allow off-heap Metaspace, G1 native sets, and Netty buffers to exceed Docker/Pterodactyl memory limits.",
+                    "Replace -XX:MaxRAMPercentage with explicit '-Xms" + safeHeapMb + "M -Xmx" + safeHeapMb
+                            + "M' (without -XX:+AlwaysPreTouch) to leave 20-25% container RAM for off-heap memory."
+            ));
+        } else if (jvm != null && !jvm.hasMatchingXmsXmx()) {
             list.add(new InfrastructureRecommendation(
                     "Heap Configuration",
                     "Match initial heap (-Xms) and maximum heap (-Xmx)",
                     "Dynamic heap resizing during live gameplay causes OS page faults and GC pauses.",
-                    heapMaxMb <= 1536L
-                            ? "Set -Xms equal to -Xmx (e.g. -Xms" + heapMaxMb + "M -Xmx" + heapMaxMb + "M) while leaving host RAM for OS/Metaspace/Netty."
+                    safeHeapMb <= 1536L
+                            ? "Set -Xms equal to -Xmx (e.g. -Xms" + safeHeapMb + "M -Xmx" + safeHeapMb + "M) while leaving host RAM for OS/Metaspace/Netty."
                             : "Set -Xms equal to -Xmx in your startup flags and leave 1.5GB-2GB of host RAM for off-heap Metaspace/Netty buffers."
             ));
         }
