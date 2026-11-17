@@ -26,6 +26,18 @@ public final class AlertManager {
     private final ConfigManager configManager;
     private final Logger logger;
     private final Map<String, Long> lastAlertMillis = new ConcurrentHashMap<String, Long>();
+    private volatile AlertSink externalSink;
+
+    /**
+     * Receives every alert that passed severity and cooldown filtering (e.g. the webhook notifier).
+     */
+    public interface AlertSink {
+        void onAlert(Severity severity, String summary);
+    }
+
+    public void setExternalSink(AlertSink sink) {
+        this.externalSink = sink;
+    }
 
     public AlertManager(Server server,
                         SchedulerAdapter scheduler,
@@ -79,6 +91,13 @@ public final class AlertManager {
             }
             if (adminBroadcast) {
                 broadcastToAdmins(summary);
+            }
+            AlertSink sink = this.externalSink;
+            if (sink != null) {
+                try {
+                    sink.onAlert(finding.getSeverity(), summary);
+                } catch (Throwable ignored) {
+                }
             }
             sent++;
         }

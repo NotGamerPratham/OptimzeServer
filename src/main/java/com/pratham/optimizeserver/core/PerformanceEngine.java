@@ -8,6 +8,7 @@ import com.pratham.optimizeserver.compatibility.CompatibilityManager;
 import com.pratham.optimizeserver.compatibility.CompatibilityReport;
 import com.pratham.optimizeserver.config.ConfigManager;
 import com.pratham.optimizeserver.integrations.DependencyAutoInstaller;
+import com.pratham.optimizeserver.integrations.WebhookNotifier;
 import com.pratham.optimizeserver.integrations.chunky.ChunkyIntegration;
 import com.pratham.optimizeserver.integrations.spark.SparkIntegration;
 import com.pratham.optimizeserver.metrics.MetricRegistry;
@@ -67,6 +68,7 @@ public final class PerformanceEngine implements EngineLifecycle {
 
     private TickMonitor tickMonitor;
     private LagSpikeRecorder lagSpikeRecorder;
+    private final WebhookNotifier webhookNotifier;
     private final AtomicLong lastSpikeAlertMillis = new AtomicLong(0L);
     private CpuMonitor cpuMonitor;
     private MemoryMonitor memoryMonitor;
@@ -112,6 +114,7 @@ public final class PerformanceEngine implements EngineLifecycle {
         this.dataFolder = dataFolder != null ? dataFolder : new File(".");
         this.logger = logger != null ? logger : Logger.getLogger("OptimizeServer");
         this.configManager = configManager;
+        this.webhookNotifier = new WebhookNotifier(this.logger);
     }
 
     @Override
@@ -180,6 +183,25 @@ public final class PerformanceEngine implements EngineLifecycle {
 
         this.diagnosticCoordinator = new DiagnosticCoordinator();
         this.alertManager = new AlertManager(server, scheduler, configManager, logger);
+        this.alertManager.setExternalSink(new AlertManager.AlertSink() {
+            @Override
+            public void onAlert(com.pratham.optimizeserver.analyzer.Severity severity, final String summary) {
+                // processFindings already runs on the async snapshot worker, but keep the HTTP call on its own task
+                if (!isWebhookEnabled()) {
+                    return;
+                }
+                final String icon = severity == com.pratham.optimizeserver.analyzer.Severity.CRITICAL ? ":red_circle:" : ":orange_circle:";
+                Runnable post = new Runnable() {
+                    @Override
+                    public void run() {
+                        postWebhook(icon + " **OptimizeServer alert** " + summary);
+                    }
+                };
+                if (scheduler == null || !scheduler.runAsync(post)) {
+                    post.run();
+                }
+            }
+        });
         this.serverConfigAuditor = new ServerConfigAuditor();
 
         OptimizationRegistry optRegistry = new OptimizationRegistry();
@@ -393,7 +415,7 @@ public final class PerformanceEngine implements EngineLifecycle {
             } catch (Throwable ignored) {
             }
         }
-        return "1.5.0";
+        return "1.6.0";
     }
 
     /**
@@ -480,7 +502,10 @@ public final class PerformanceEngine implements EngineLifecycle {
      * Logs a cooldown-limited console line for a lag spike. Runs the logging off the tick thread.
      */
     private void announceSpike(final LagSpikeRecorder.LagSpike spike) {
-        if (configManager != null && !configManager.getBoolean("monitoring.lag-spikes.console-alert", true)) {
+        final boolean console = configManager == null || configManager.getBoolean("monitoring.lag-spikes.console-alert", true);
+        final boolean webhook = isWebhookEnabled()
+                && configManager.getBoolean("alerts.webhook.include-lag-spikes", true);
+        if (!console && !webhook) {
             return;
         }
         long cooldownMs = Math.max(5L, configManager != null
@@ -497,13 +522,56 @@ public final class PerformanceEngine implements EngineLifecycle {
         Runnable log = new Runnable() {
             @Override
             public void run() {
-                logger.warning(line);
+                if (console) {
+                    logger.warning(line);
+                }
+                if (webhook) {
+                    postWebhook(":warning: " + line.replace("[OptimizeServer] ", "**OptimizeServer** "));
+                }
             }
         };
         if (scheduler == null || !scheduler.runAsync(log)) {
-            log.run();
+            if (console) {
+                logger.warning(line);
+            }
         }
     }
+
+    private boolean isWebhookEnabled() {
+        return configManager != null
+                && configManager.getBoolean("alerts.webhook.enabled", false)
+                && WebhookNotifier.isAllowedUrl(configManager.getString("alerts.webhook.url", ""));
+    }
+
+    /**
+     * Posts to the configured alert webhook. Blocking network I/O: call from an async worker only.
+     */
+    private void postWebhook(String message) {
+        if (!isWebhookEnabled()) {
+            return;
+        }
+        long minIntervalMs = Math.max(5L, configManager.getLong("alerts.webhook.min-interval-seconds", 10L)) * 1000L;
+        webhookNotifier.send(configManager.getString("alerts.webhook.url", ""), message, minIntervalMs, 5000);
+    }
+
+    /**
+     * Sends a test message to the configured webhook, ignoring the rate limit. Blocking: call off the server thread.
+     *
+     * @return null on success, otherwise a reason it was not delivered
+     */
+    public String sendWebhookTest() {
+        if (configManager == null || !configManager.getBoolean("alerts.webhook.enabled", false)) {
+            return "alerts.webhook.enabled is false in config.yml";
+        }
+        String url = configManager.getString("alerts.webhook.url", "");
+        if (!WebhookNotifier.isAllowedUrl(url)) {
+            return "alerts.webhook.url must be an https:// webhook URL";
+        }
+        boolean ok = webhookNotifier.send(url, ":white_check_mark: **OptimizeServer** webhook test: alerts from this server will appear here.", 0L, 5000);
+        return ok ? null : "the webhook did not accept the message (check the URL; failures are logged once in console)";
+    }
+
+    public WebhookNotifier getWebhookNotifier() { return webhookNotifier; }
 
     public LagSpikeRecorder getLagSpikeRecorder() { return lagSpikeRecorder; }
 

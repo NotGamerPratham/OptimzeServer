@@ -36,7 +36,7 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
 
     private static final List<String> ROOT_SUBCOMMANDS = Arrays.asList(
             "help", "version", "status", "tps", "mspt", "cpu", "memory", "network",
-            "chunks", "entities", "worlds", "spikes", "diagnose", "profile", "health", "optimize", "tune", "capacity",
+            "chunks", "entities", "worlds", "spikes", "plugins", "history", "webhook", "diagnose", "profile", "health", "optimize", "tune", "capacity",
             "report", "reload"
     );
 
@@ -65,7 +65,7 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
 
     public OptimizeServerCommand(PerformanceEngine engine, String pluginVersion) {
         this.engine = engine;
-        this.pluginVersion = pluginVersion != null ? pluginVersion : "1.5.0";
+        this.pluginVersion = pluginVersion != null ? pluginVersion : "1.6.0";
     }
 
     @Override
@@ -134,6 +134,21 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
         }
         if ("chunks".equals(sub)) {
             handleChunks(sender, args);
+            return true;
+        }
+        if ("plugins".equals(sub)) {
+            if (!requirePermission(sender, CommandPermissions.DIAGNOSE)) return true;
+            handlePlugins(sender);
+            return true;
+        }
+        if ("history".equals(sub)) {
+            if (!requirePermission(sender, CommandPermissions.STATUS)) return true;
+            handleHistory(sender, args.length >= 2 ? parsePage(args[1], 5) : 5);
+            return true;
+        }
+        if ("webhook".equals(sub)) {
+            if (!requirePermission(sender, CommandPermissions.DIAGNOSE)) return true;
+            handleWebhook(sender, args);
             return true;
         }
         if ("worlds".equals(sub)) {
@@ -222,6 +237,9 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
                 ChatColor.YELLOW + "/os chunks [status|recommend|start|pause|cancel]" + ChatColor.GRAY + " - Chunk metrics & Chunky control",
                 ChatColor.YELLOW + "/os entities" + ChatColor.GRAY + " - Display entity and block-entity distributions",
                 ChatColor.YELLOW + "/os worlds" + ChatColor.GRAY + " - Per-world chunks, entities, block entities, and players",
+                ChatColor.YELLOW + "/os history [minutes]" + ChatColor.GRAY + " - Sparkline charts of TPS, MSPT, heap, and players",
+                ChatColor.YELLOW + "/os plugins" + ChatColor.GRAY + " - Plugins ranked by scheduled tasks and async workers",
+                ChatColor.YELLOW + "/os webhook test" + ChatColor.GRAY + " - Send a test message to the configured alert webhook",
                 ChatColor.YELLOW + "/os spikes [page|clear]" + ChatColor.GRAY + " - Recent lag spikes with their context and likely cause",
                 ChatColor.YELLOW + "/os diagnose [full|cpu|memory|chunks|entities|plugins]" + ChatColor.GRAY + " - Bottleneck analysis",
                 ChatColor.YELLOW + "/os profile <start|stop|status|memory>" + ChatColor.GRAY + " - Spark profiler control",
@@ -355,6 +373,122 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
         sender.sendMessage(ChatColor.GRAY + "Distribution by World: " + ChatColor.WHITE + s.getEntitiesByWorld());
         sender.sendMessage(ChatColor.GRAY + "Distribution by Type : " + ChatColor.WHITE + s.getEntitiesByType());
         sender.sendMessage(ChatColor.GRAY + "Gameplay Policy: Read-only monitoring; OptimizeServer never removes entities or disables mob AI.");
+    }
+
+    private void handlePlugins(CommandSender sender) {
+        com.pratham.optimizeserver.monitoring.TaskMonitor tasks = engine.getTaskMonitor();
+        sender.sendMessage(ChatColor.DARK_AQUA + "=== " + ChatColor.AQUA + "Plugin Scheduler Load" + ChatColor.DARK_AQUA + " ===");
+        if (engine.getScheduler() != null && engine.getScheduler().isRegionThreaded()) {
+            sender.sendMessage(ChatColor.GRAY + "Per-plugin task counts are unavailable on Folia (no global Bukkit scheduler).");
+            return;
+        }
+        final Map<String, Integer> pending = tasks.getPendingTasksByPlugin();
+        Map<String, Integer> sync = tasks.getPendingSyncTasksByPlugin();
+        final Map<String, Integer> workers = tasks.getActiveWorkersByPlugin();
+        java.util.Set<String> names = new java.util.HashSet<String>();
+        names.addAll(pending.keySet());
+        names.addAll(workers.keySet());
+        if (names.isEmpty()) {
+            sender.sendMessage(ChatColor.GREEN + "No plugin has scheduled tasks or running async workers right now.");
+            return;
+        }
+        List<String> sorted = new ArrayList<String>(names);
+        Collections.sort(sorted, new java.util.Comparator<String>() {
+            @Override
+            public int compare(String a, String b) {
+                int byLoad = (valueOf(pending, b) + valueOf(workers, b)) - (valueOf(pending, a) + valueOf(workers, a));
+                return byLoad != 0 ? byLoad : a.compareToIgnoreCase(b);
+            }
+        });
+        sender.sendMessage(ChatColor.GRAY + "Totals: " + ChatColor.WHITE + tasks.getPendingServerTasks() + ChatColor.GRAY
+                + " scheduled tasks (" + ChatColor.WHITE + tasks.getPendingSyncTasks() + ChatColor.GRAY + " on the main thread), "
+                + ChatColor.WHITE + tasks.getActiveServerWorkers() + ChatColor.GRAY + " async workers running.");
+        int shown = 0;
+        for (String name : sorted) {
+            if (shown++ >= 10) {
+                sender.sendMessage(ChatColor.GRAY + "... and " + (sorted.size() - 10) + " more.");
+                break;
+            }
+            sender.sendMessage(ChatColor.YELLOW + name + ChatColor.GRAY + ": "
+                    + ChatColor.WHITE + valueOf(pending, name) + ChatColor.GRAY + " tasks ("
+                    + ChatColor.WHITE + valueOf(sync, name) + ChatColor.GRAY + " sync) | "
+                    + ChatColor.WHITE + valueOf(workers, name) + ChatColor.GRAY + " async workers");
+        }
+        String growing = tasks.getGrowingTaskPlugin();
+        if (growing != null && tasks.getGrowingTaskPluginStreak() >= 3) {
+            sender.sendMessage(ChatColor.RED + "Warning: main-thread task count of " + ChatColor.YELLOW + growing
+                    + ChatColor.RED + " has grown " + tasks.getGrowingTaskPluginStreak()
+                    + " samples in a row; this can indicate a task leak.");
+        }
+        sender.sendMessage(ChatColor.GRAY + "Counts are scheduled tasks, not CPU time; use /os profile start for exact per-plugin CPU.");
+    }
+
+    private void handleHistory(CommandSender sender, int minutes) {
+        int safeMinutes = Math.max(1, Math.min(15, minutes));
+        List<MetricSnapshot> recent = engine.getMetricRegistry().getHistory().getRecent(safeMinutes * 60);
+        sender.sendMessage(ChatColor.DARK_AQUA + "=== " + ChatColor.AQUA + "Last " + safeMinutes + " min (oldest to newest)" + ChatColor.DARK_AQUA + " ===");
+        if (recent.size() < 2) {
+            sender.sendMessage(ChatColor.GRAY + "Not enough history yet; samples are taken once per second.");
+            return;
+        }
+        List<Double> tps = new ArrayList<Double>();
+        List<Double> mspt = new ArrayList<Double>();
+        List<Double> heap = new ArrayList<Double>();
+        List<Double> players = new ArrayList<Double>();
+        for (MetricSnapshot s : recent) {
+            tps.add(s.getTps5s());
+            mspt.add(s.getAverageMspt());
+            heap.add(s.getHeapUsagePercent());
+            players.add((double) s.getOnlinePlayers());
+        }
+        sendSparkline(sender, "TPS    ", tps, 0.0, 20.0, "%.1f");
+        sendSparkline(sender, "MSPT   ", mspt, 0.0, Math.max(50.0, maxOf(mspt)), "%.1f ms");
+        sendSparkline(sender, "Heap   ", heap, 0.0, 100.0, "%.0f%%");
+        sendSparkline(sender, "Players", players, 0.0, Math.max(1.0, maxOf(players)), "%.0f");
+    }
+
+    private static double maxOf(List<Double> values) {
+        double m = 0.0;
+        for (Double v : values) {
+            m = Math.max(m, v);
+        }
+        return m;
+    }
+
+    private static void sendSparkline(CommandSender sender, String label, List<Double> values,
+                                      double floor, double ceiling, String fmt) {
+        double[] buckets = com.pratham.optimizeserver.reporting.Sparkline.bucket(values, 40);
+        double min = Double.MAX_VALUE;
+        double max = -Double.MAX_VALUE;
+        double sum = 0.0;
+        for (Double v : values) {
+            min = Math.min(min, v);
+            max = Math.max(max, v);
+            sum += v;
+        }
+        sender.sendMessage(ChatColor.YELLOW + label + " " + ChatColor.AQUA
+                + com.pratham.optimizeserver.reporting.Sparkline.render(buckets, floor, ceiling)
+                + ChatColor.GRAY + " min " + String.format(Locale.ROOT, fmt, min)
+                + " / avg " + String.format(Locale.ROOT, fmt, sum / values.size())
+                + " / max " + String.format(Locale.ROOT, fmt, max));
+    }
+
+    private void handleWebhook(final CommandSender sender, String[] args) {
+        if (args.length < 2 || !"test".equalsIgnoreCase(args[1])) {
+            sender.sendMessage(ChatColor.GRAY + "Usage: " + ChatColor.YELLOW + "/os webhook test"
+                    + ChatColor.GRAY + " (configure alerts.webhook in config.yml, then /os reload)");
+            return;
+        }
+        sender.sendMessage(ChatColor.GRAY + "[OptimizeServer] Sending a test message to the alert webhook...");
+        runIo(new Runnable() {
+            @Override
+            public void run() {
+                String error = engine.sendWebhookTest();
+                deliver(sender, Collections.singletonList(error == null
+                        ? ChatColor.GREEN + "[OptimizeServer] Webhook test delivered."
+                        : ChatColor.RED + "[OptimizeServer] Webhook test not sent: " + error));
+            }
+        });
     }
 
     private void handleWorlds(CommandSender sender) {
@@ -979,6 +1113,8 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
             if ("report".equals(sub)) return filterPrefix(REPORT_SUBCOMMANDS, args[1]);
             if ("tune".equals(sub)) return filterPrefix(Arrays.asList("apply", "restore", "1", "2"), args[1]);
             if ("spikes".equals(sub)) return filterPrefix(Arrays.asList("1", "2", "clear"), args[1]);
+            if ("history".equals(sub)) return filterPrefix(Arrays.asList("1", "5", "15"), args[1]);
+            if ("webhook".equals(sub)) return filterPrefix(Collections.singletonList("test"), args[1]);
         }
         if (args.length == 3 && "tune".equalsIgnoreCase(args[0]) && "apply".equalsIgnoreCase(args[1])) {
             return filterPrefix(Collections.singletonList("confirm"), args[2]);

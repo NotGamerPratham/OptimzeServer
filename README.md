@@ -88,6 +88,9 @@ All three platforms ship the identical universal `OptimizeServer.jar` (Java 8+ b
 | `/os entities` | `optimizeserver.status` | Read-only entity and tile-entity counts by type and world |
 | `/os worlds` | `optimizeserver.status` | Per-world loaded chunks, entities, block entities (ticking on Paper), and players |
 | `/os spikes [page\|clear]` | `optimizeserver.status` | Recent ticks over the lag-spike threshold, with chunk/entity/player/heap/GC context and likely cause (`clear` needs `optimizeserver.diagnose`) |
+| `/os history [minutes]` | `optimizeserver.status` | Sparkline charts of TPS, MSPT, heap, and players over the last 1-15 minutes |
+| `/os plugins` | `optimizeserver.diagnose` | Plugins ranked by scheduled tasks (main-thread vs async) and running async workers, with a task-leak warning |
+| `/os webhook test` | `optimizeserver.diagnose` | Send a test message to the opt-in alert webhook (`alerts.webhook` in `config.yml`) |
 | `/os chunks [status\|recommend\|start\|pause\|cancel]` | `optimizeserver.chunks` | Chunk telemetry and manual Chunky pre-generation controls |
 | `/os diagnose [full\|cpu\|memory\|chunks\|entities\|plugins]` | `optimizeserver.diagnose` | Evidence-backed bottleneck classification & recommendations |
 | `/os profile <start\|stop\|status\|memory>` | `optimizeserver.profile` | Spark profiler session control and memory diagnostics |
@@ -130,7 +133,7 @@ mvn clean test package -Pmodern-java21
 
 `pom.xml` is pre-configured with `<artifactId>optimizeserver</artifactId>` (lowercase as required by GitHub Packages) and `<distributionManagement>` pointing to `https://maven.pkg.github.com/notgamerpratham/optimzeserver`.
 
-- **Automated Publishing (GitHub Actions):** Pushing to `main` or creating a release runs [`.github/workflows/maven-publish.yml`](.github/workflows/maven-publish.yml), which executes all JUnit tests, uploads `OptimizeServer.jar`, and publishes `com.pratham:optimizeserver:1.5.0` to GitHub Packages using `GITHUB_TOKEN`.
+- **Automated Publishing (GitHub Actions):** Pushing to `main` or creating a release runs [`.github/workflows/maven-publish.yml`](.github/workflows/maven-publish.yml), which executes all JUnit tests, uploads `OptimizeServer.jar`, and publishes `com.pratham:optimizeserver:1.6.0` to GitHub Packages using `GITHUB_TOKEN`.
 - **Local Publishing (`mvn deploy`):** Configure `~/.m2/settings.xml` with server `<id>github</id>`, your GitHub username, and a classic Personal Access Token (`write:packages`, `read:packages`), then run:
 
   ```bash
@@ -143,7 +146,7 @@ mvn clean test package -Pmodern-java21
   <dependency>
       <groupId>com.pratham</groupId>
       <artifactId>optimizeserver</artifactId>
-      <version>1.5.0</version>
+      <version>1.6.0</version>
       <scope>provided</scope>
   </dependency>
   ```
@@ -154,8 +157,8 @@ mvn clean test package -Pmodern-java21
 2. Tag and push:
 
    ```bash
-   git tag v1.5.0
-   git push origin v1.5.0
+   git tag v1.6.0
+   git push origin v1.6.0
    ```
 
 3. [`.github/workflows/release.yml`](.github/workflows/release.yml) then builds and tests the JAR and:

@@ -2,6 +2,13 @@
 
 All notable changes to **OptimizeServer** will be documented in this file.
 
+## [1.6.0] - 2026-11-18
+
+### Added
+- **`/os history [minutes]`:** sparkline charts of TPS, MSPT, heap usage, and online players for the last 1-15 minutes (default 5), with min / avg / max for each, built from the snapshots the plugin already keeps.
+- **`/os plugins`:** ranks plugins by scheduled tasks (main-thread vs async) and running async workers, and warns when a plugin's main-thread task count keeps growing (a likely task leak). Uses the existing off-thread task sampling, so it adds no server cost.
+- **Webhook alerts (opt-in):** `alerts.webhook` in `config.yml` posts critical/high findings and lag spikes to a Discord (or compatible) webhook. Disabled by default; requires an `https://` URL; rate-limited (`min-interval-seconds`, default 10); sent from async workers only. `/os webhook test` checks the setup.
+
 ## [1.5.0] - 2026-11-17
 
 ### Added

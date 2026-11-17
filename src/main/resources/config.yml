@@ -187,6 +187,15 @@ alerts:
   admin-permission-broadcast: false
   alert-cooldown-seconds: 60
   min-severity: HIGH
+  # Optional: post alerts and lag spikes to a Discord (or compatible) webhook.
+  # Disabled by default; nothing is sent anywhere unless you set enabled: true and a URL.
+  webhook:
+    enabled: false
+    # Discord: Server Settings > Integrations > Webhooks > Copy Webhook URL (must be https://)
+    url: ""
+    include-lag-spikes: true
+    # Minimum seconds between two webhook messages
+    min-interval-seconds: 10
 
 reports:
   directory: "reports"
