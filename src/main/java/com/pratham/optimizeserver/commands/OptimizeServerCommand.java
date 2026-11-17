@@ -4,6 +4,7 @@ import com.pratham.optimizeserver.analyzer.BottleneckCategory;
 import com.pratham.optimizeserver.analyzer.DiagnosticCoordinator;
 import com.pratham.optimizeserver.analyzer.DiagnosticFinding;
 import com.pratham.optimizeserver.analyzer.RecommendationEngine;
+import com.pratham.optimizeserver.analyzer.ServerConfigApplier;
 import com.pratham.optimizeserver.analyzer.ServerConfigAuditor;
 import com.pratham.optimizeserver.compatibility.CompatibilityReport;
 import com.pratham.optimizeserver.core.PerformanceEngine;
@@ -64,7 +65,7 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
 
     public OptimizeServerCommand(PerformanceEngine engine, String pluginVersion) {
         this.engine = engine;
-        this.pluginVersion = pluginVersion != null ? pluginVersion : "1.4.0";
+        this.pluginVersion = pluginVersion != null ? pluginVersion : "1.5.0";
     }
 
     @Override
@@ -227,6 +228,8 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
                 ChatColor.YELLOW + "/os health" + ChatColor.GRAY + " - Comprehensive server and Spark health overview",
                 ChatColor.YELLOW + "/os optimize [status|list|enable|disable|rollback]" + ChatColor.GRAY + " - Hybrid optimization control",
                 ChatColor.YELLOW + "/os tune [page]" + ChatColor.GRAY + " - Audit server configs & generate non-gameplay-altering presets",
+                ChatColor.YELLOW + "/os tune apply [confirm]" + ChatColor.GRAY + " - Write the gameplay-neutral config fixes (backed up first)",
+                ChatColor.YELLOW + "/os tune restore" + ChatColor.GRAY + " - Undo the last /os tune apply from its backup",
                 ChatColor.YELLOW + "/os capacity" + ChatColor.GRAY + " - Inspect RAM/OldGen headroom and safe player capacity",
                 ChatColor.YELLOW + "/os report <generate|history>" + ChatColor.GRAY + " - Generate or list local diagnostic reports",
                 ChatColor.YELLOW + "/os reload" + ChatColor.GRAY + " - Reload and re-validate config.yml"
@@ -684,7 +687,139 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
         sender.sendMessage(ChatColor.RED + "Usage: /os optimize <status|list|enable <id>|disable <id>|rollback <id>>");
     }
 
+    /** Pending /os tune apply confirmations: sender name -> expiry millis. */
+    private final Map<String, Long> pendingTuneApply = new java.util.concurrent.ConcurrentHashMap<String, Long>();
+    private static final long TUNE_CONFIRM_WINDOW_MS = 60_000L;
+
+    /** Runs file I/O work off the tick thread on live servers, inline in headless tests. */
+    private void runIo(final Runnable work) {
+        if (engine.shouldOffloadAsyncIo()) {
+            engine.getScheduler().runAsync(work);
+        } else {
+            work.run();
+        }
+    }
+
+    /** Delivers messages on the global/main thread on live servers, inline in headless tests. */
+    private void deliver(final CommandSender sender, final List<String> messages) {
+        Runnable send = new Runnable() {
+            @Override
+            public void run() {
+                for (String m : messages) {
+                    sender.sendMessage(m);
+                }
+            }
+        };
+        if (engine.shouldOffloadAsyncIo()) {
+            engine.getScheduler().runGlobal(send);
+        } else {
+            send.run();
+        }
+    }
+
+    private void handleTuneApply(final CommandSender sender, String[] args) {
+        if (!requirePermission(sender, CommandPermissions.TUNE_APPLY)) {
+            return;
+        }
+        final String who = sender.getName() != null ? sender.getName() : "console";
+        boolean confirming = args.length >= 3 && "confirm".equalsIgnoreCase(args[2]);
+        if (confirming) {
+            Long expiry = pendingTuneApply.remove(who);
+            if (expiry == null || expiry.longValue() < System.currentTimeMillis()) {
+                sender.sendMessage(ChatColor.RED + "[OptimizeServer] No pending change set. Run "
+                        + ChatColor.YELLOW + "/os tune apply" + ChatColor.RED + " first, then confirm within 60 seconds.");
+                return;
+            }
+            sender.sendMessage(ChatColor.GRAY + "[OptimizeServer] Applying tuning changes (backing up files first)...");
+            runIo(new Runnable() {
+                @Override
+                public void run() {
+                    ServerConfigApplier.ApplyResult result = engine.applyTuneSuggestions(engine.auditServerConfig());
+                    List<String> out = new ArrayList<String>();
+                    out.add(ChatColor.DARK_AQUA + "=== " + ChatColor.AQUA + "Tuning Applied" + ChatColor.DARK_AQUA + " ===");
+                    if (result.getApplied().isEmpty()) {
+                        out.add(ChatColor.GREEN + "Nothing needed changing.");
+                    }
+                    for (String a : result.getApplied()) {
+                        out.add(ChatColor.GREEN + "  + " + ChatColor.WHITE + a);
+                    }
+                    for (String s : result.getSkipped()) {
+                        out.add(ChatColor.YELLOW + "  - skipped " + ChatColor.GRAY + s);
+                    }
+                    if (result.getBackupDir() != null) {
+                        out.add(ChatColor.GRAY + "Backup: " + ChatColor.YELLOW + result.getBackupDir().getPath()
+                                + ChatColor.GRAY + " (undo with " + ChatColor.YELLOW + "/os tune restore" + ChatColor.GRAY + ")");
+                        out.add(ChatColor.GOLD + "Restart the server for these settings to take effect.");
+                    }
+                    out.add(ChatColor.GRAY + "JVM flags can't be changed by a plugin; copy them from plugins/OptimizeServer/presets/recommended-jvm-flags.txt into your start script.");
+                    deliver(sender, out);
+                }
+            });
+            return;
+        }
+
+        runIo(new Runnable() {
+            @Override
+            public void run() {
+                ServerConfigAuditor.AuditReport audit = engine.auditServerConfig();
+                List<ServerConfigAuditor.TuningSuggestion> changes = ServerConfigApplier.applicable(audit);
+                List<String> out = new ArrayList<String>();
+                out.add(ChatColor.DARK_AQUA + "=== " + ChatColor.AQUA + "Tune Apply Preview" + ChatColor.DARK_AQUA + " ===");
+                if (changes.isEmpty()) {
+                    out.add(ChatColor.GREEN + "No config-file changes to apply; everything auto-applicable is already tuned.");
+                    deliver(sender, out);
+                    return;
+                }
+                for (ServerConfigAuditor.TuningSuggestion s : changes) {
+                    out.add(ChatColor.YELLOW + "[" + s.getFile() + "] " + ChatColor.WHITE + s.getKey()
+                            + ChatColor.GRAY + ": " + s.getCurrentValue() + " -> " + ChatColor.GREEN + s.getApplyValue());
+                }
+                int manual = audit.getSuggestions().size() - changes.size();
+                if (manual > 0) {
+                    out.add(ChatColor.GRAY + "" + manual + " other suggestion(s) (JVM flags, Java, server jar) must be applied by hand; see /os tune.");
+                }
+                out.add(ChatColor.GRAY + "All of these are gameplay-neutral. Each file is backed up first; undo any time with "
+                        + ChatColor.YELLOW + "/os tune restore" + ChatColor.GRAY + ".");
+                out.add(ChatColor.GOLD + "Type " + ChatColor.YELLOW + "/os tune apply confirm" + ChatColor.GOLD + " within 60 seconds to write these changes.");
+                pendingTuneApply.put(who, Long.valueOf(System.currentTimeMillis() + TUNE_CONFIRM_WINDOW_MS));
+                deliver(sender, out);
+            }
+        });
+    }
+
+    private void handleTuneRestore(final CommandSender sender) {
+        if (!requirePermission(sender, CommandPermissions.TUNE_APPLY)) {
+            return;
+        }
+        runIo(new Runnable() {
+            @Override
+            public void run() {
+                List<String> out = new ArrayList<String>();
+                try {
+                    List<String> restored = engine.restoreLatestTuneBackup();
+                    if (restored.isEmpty()) {
+                        out.add(ChatColor.YELLOW + "[OptimizeServer] No /os tune apply backup found to restore.");
+                    } else {
+                        out.add(ChatColor.GREEN + "[OptimizeServer] Restored from the latest backup: " + ChatColor.WHITE + restored);
+                        out.add(ChatColor.GOLD + "Restart the server for the restored settings to take effect.");
+                    }
+                } catch (IOException ex) {
+                    out.add(ChatColor.RED + "[OptimizeServer] Restore failed: " + ex.getMessage());
+                }
+                deliver(sender, out);
+            }
+        });
+    }
+
     private void handleTune(final CommandSender sender, String[] args) {
+        if (args.length >= 2 && "apply".equalsIgnoreCase(args[1])) {
+            handleTuneApply(sender, args);
+            return;
+        }
+        if (args.length >= 2 && "restore".equalsIgnoreCase(args[1])) {
+            handleTuneRestore(sender);
+            return;
+        }
         final int page = args.length >= 2 ? parsePage(args[1], 1) : 1;
         if (engine.shouldOffloadAsyncIo()) {
             sender.sendMessage(ChatColor.GRAY + "[OptimizeServer] Auditing server configurations asynchronously...");
@@ -738,6 +873,11 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
         }
         CommandPagination.sendPaginated(sender, "Zero-Gameplay-Impact Config Audit", lines, page, 8, "/os tune");
         sender.sendMessage(ChatColor.GRAY + "Recommended JVM Flags: " + ChatColor.AQUA + audit.getRecommendedJvmCommand());
+        int applicable = ServerConfigApplier.applicable(audit).size();
+        if (applicable > 0) {
+            sender.sendMessage(ChatColor.GOLD + "" + applicable + " of these can be written to your config files with "
+                    + ChatColor.YELLOW + "/os tune apply" + ChatColor.GOLD + " (backed up first).");
+        }
         if (presetFile != null) {
             sender.sendMessage(ChatColor.GRAY + "Saved safe preset sheet to: " + ChatColor.YELLOW + presetFile.getPath());
         } else if (presetError != null) {
@@ -837,7 +977,11 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
             if ("optimize".equals(sub)) return filterPrefix(OPTIMIZE_SUBCOMMANDS, args[1]);
             if ("chunks".equals(sub)) return filterPrefix(CHUNKS_SUBCOMMANDS, args[1]);
             if ("report".equals(sub)) return filterPrefix(REPORT_SUBCOMMANDS, args[1]);
+            if ("tune".equals(sub)) return filterPrefix(Arrays.asList("apply", "restore", "1", "2"), args[1]);
             if ("spikes".equals(sub)) return filterPrefix(Arrays.asList("1", "2", "clear"), args[1]);
+        }
+        if (args.length == 3 && "tune".equalsIgnoreCase(args[0]) && "apply".equalsIgnoreCase(args[1])) {
+            return filterPrefix(Collections.singletonList("confirm"), args[2]);
         }
         if (args.length == 3 && "optimize".equalsIgnoreCase(args[0])) {
             String action = args[1].toLowerCase(Locale.ROOT);

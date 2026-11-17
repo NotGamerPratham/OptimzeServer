@@ -30,7 +30,7 @@ OptimizeServer strictly preserves all 16 vanilla gameplay invariants:
 - Block interactions, redstone behaviour, game physics, and random tick behaviour
 - World generation, chunk loading semantics, and gameplay-related packet semantics
 
-OptimizeServer **never** skips server ticks, falsifies TPS readings, removes entities, disables mob AI, reduces simulation/view distance, forces `System.gc()`, or mutates world configuration.
+OptimizeServer **never** skips server ticks, falsifies TPS readings, removes entities, disables mob AI, reduces simulation/view distance, forces `System.gc()`, or mutates world data. Server config files are only edited when an admin runs `/os tune apply confirm`, and only with gameplay-neutral performance values (backed up first, undoable with `/os tune restore`).
 
 ---
 
@@ -94,6 +94,8 @@ All three platforms ship the identical universal `OptimizeServer.jar` (Java 8+ b
 | `/os health` | `optimizeserver.profile` | Combined server and Spark health report |
 | `/os optimize [status\|list\|enable\|disable\|rollback]` | `optimizeserver.optimize` | Manage and rollback the 13 internal optimization modules |
 | `/os tune [page]` | `optimizeserver.diagnose` | Audit `server.properties`, `bukkit.yml`, `spigot.yml`, Paper configs, and JVM flags without altering vanilla gameplay; saves presets under `plugins/OptimizeServer/presets/` |
+| `/os tune apply [confirm]` | `optimizeserver.tune.apply` | Preview, then (with `confirm` within 60 s) write the gameplay-neutral config-file fixes from `/os tune`. Each file is backed up to `plugins/OptimizeServer/backups/<timestamp>/` first; only existing keys are changed and comments are kept. JVM flags are never edited. Restart to take effect |
+| `/os tune restore` | `optimizeserver.tune.apply` | Restore the config files from the latest `/os tune apply` backup |
 | `/os capacity` | `optimizeserver.status` | Inspect heap/OldGen headroom and estimated safe vanilla player capacity |
 | `/os report <generate\|history>` | `optimizeserver.report` | Generate and view saved local diagnostic reports |
 | `/os reload` | `optimizeserver.reload` | Reload and re-validate `config.yml` |
@@ -128,7 +130,7 @@ mvn clean test package -Pmodern-java21
 
 `pom.xml` is pre-configured with `<artifactId>optimizeserver</artifactId>` (lowercase as required by GitHub Packages) and `<distributionManagement>` pointing to `https://maven.pkg.github.com/notgamerpratham/optimzeserver`.
 
-- **Automated Publishing (GitHub Actions):** Pushing to `main` or creating a release runs [`.github/workflows/maven-publish.yml`](.github/workflows/maven-publish.yml), which executes all JUnit tests, uploads `OptimizeServer.jar`, and publishes `com.pratham:optimizeserver:1.4.0` to GitHub Packages using `GITHUB_TOKEN`.
+- **Automated Publishing (GitHub Actions):** Pushing to `main` or creating a release runs [`.github/workflows/maven-publish.yml`](.github/workflows/maven-publish.yml), which executes all JUnit tests, uploads `OptimizeServer.jar`, and publishes `com.pratham:optimizeserver:1.5.0` to GitHub Packages using `GITHUB_TOKEN`.
 - **Local Publishing (`mvn deploy`):** Configure `~/.m2/settings.xml` with server `<id>github</id>`, your GitHub username, and a classic Personal Access Token (`write:packages`, `read:packages`), then run:
 
   ```bash
@@ -141,7 +143,7 @@ mvn clean test package -Pmodern-java21
   <dependency>
       <groupId>com.pratham</groupId>
       <artifactId>optimizeserver</artifactId>
-      <version>1.4.0</version>
+      <version>1.5.0</version>
       <scope>provided</scope>
   </dependency>
   ```
@@ -152,8 +154,8 @@ mvn clean test package -Pmodern-java21
 2. Tag and push:
 
    ```bash
-   git tag v1.4.0
-   git push origin v1.4.0
+   git tag v1.5.0
+   git push origin v1.5.0
    ```
 
 3. [`.github/workflows/release.yml`](.github/workflows/release.yml) then builds and tests the JAR and:

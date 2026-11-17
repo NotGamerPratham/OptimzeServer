@@ -2,6 +2,7 @@ package com.pratham.optimizeserver.core;
 
 import com.pratham.optimizeserver.analyzer.AlertManager;
 import com.pratham.optimizeserver.analyzer.DiagnosticCoordinator;
+import com.pratham.optimizeserver.analyzer.ServerConfigApplier;
 import com.pratham.optimizeserver.analyzer.ServerConfigAuditor;
 import com.pratham.optimizeserver.compatibility.CompatibilityManager;
 import com.pratham.optimizeserver.compatibility.CompatibilityReport;
@@ -40,6 +41,7 @@ import org.bukkit.plugin.Plugin;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Logger;
@@ -391,7 +393,7 @@ public final class PerformanceEngine implements EngineLifecycle {
             } catch (Throwable ignored) {
             }
         }
-        return "1.4.0";
+        return "1.5.0";
     }
 
     /**
@@ -683,6 +685,35 @@ public final class PerformanceEngine implements EngineLifecycle {
 
     public File writeTunePresets(ServerConfigAuditor.AuditReport report) throws IOException {
         return serverConfigAuditor.writePresets(dataFolder, report);
+    }
+
+    public File getTuneBackupsFolder() {
+        return new File(dataFolder, "backups");
+    }
+
+    /**
+     * Writes the auto-applicable audit suggestions into the server's config files (with backups).
+     * Performs file I/O: call off the server thread on live servers.
+     */
+    public ServerConfigApplier.ApplyResult applyTuneSuggestions(ServerConfigAuditor.AuditReport report) {
+        ServerConfigApplier.ApplyResult result = new ServerConfigApplier().apply(
+                resolveServerRoot(), ServerConfigApplier.applicable(report), getTuneBackupsFolder());
+        if (reportGenerator != null && !result.getApplied().isEmpty()) {
+            reportGenerator.appendToRotatingActivityLog("/os tune apply changed " + result.getApplied()
+                    + " (backup: " + result.getBackupDir() + ")");
+        }
+        return result;
+    }
+
+    /**
+     * Restores the files from the most recent {@code /os tune apply} backup.
+     */
+    public List<String> restoreLatestTuneBackup() throws IOException {
+        List<String> restored = new ServerConfigApplier().restoreLatest(resolveServerRoot(), getTuneBackupsFolder());
+        if (reportGenerator != null && !restored.isEmpty()) {
+            reportGenerator.appendToRotatingActivityLog("/os tune restore restored " + restored);
+        }
+        return restored;
     }
 
     public ConfigManager getConfigManager() { return configManager; }

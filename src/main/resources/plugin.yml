@@ -32,6 +32,7 @@ permissions:
       optimizeserver.chunks: true
       optimizeserver.report: true
       optimizeserver.reload: true
+      optimizeserver.tune.apply: true
   optimizeserver.status:
     description: Allows viewing server performance status, TPS, MSPT, CPU, memory, network, chunks, and entities.
     default: op
@@ -49,6 +50,9 @@ permissions:
     default: op
   optimizeserver.report:
     description: Allows generating and inspecting local diagnostic performance reports.
+    default: op
+  optimizeserver.tune.apply:
+    description: Allows /os tune apply and /os tune restore to edit server config files (backed up first).
     default: op
   optimizeserver.reload:
     description: Allows reloading and re-validating OptimizeServer configuration.

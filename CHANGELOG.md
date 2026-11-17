@@ -2,6 +2,17 @@
 
 All notable changes to **OptimizeServer** will be documented in this file.
 
+## [1.5.0] - 2026-11-17
+
+### Added
+- **`/os tune apply`:** previews the gameplay-neutral config fixes found by `/os tune`, then writes them to `server.properties`, `bukkit.yml`, `spigot.yml`, and Paper configs after `/os tune apply confirm` (within 60 seconds). Every touched file is backed up to `plugins/OptimizeServer/backups/<timestamp>/` first, edits are line-based so comments and formatting are kept, only keys that already exist are changed, and files are replaced atomically. JVM flags, Java version, and server-jar advice stay manual. Settings take effect after a restart.
+- **`/os tune restore`:** restores the config files from the most recent `/os tune apply` backup.
+- New permission `optimizeserver.tune.apply` (default: op, included in `optimizeserver.admin`).
+- `/os tune` now says how many of its suggestions `/os tune apply` can write.
+
+### Changed
+- `.claude/` (local Claude Code worktrees and settings) is now git-ignored.
+
 ## [1.4.0] - 2026-11-17
 
 ### Added

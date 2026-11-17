@@ -59,6 +59,35 @@ public final class ServerConfigAuditor {
         public String getCurrentValue() { return currentValue; }
         public String getRecommendedValue() { return recommendedValue; }
         public String getReason() { return reason; }
+
+        /**
+         * True when this suggestion targets an on-disk server config file and carries a plain
+         * value that {@code /os tune apply} can write. JVM flags, Java version, and server-jar
+         * advice are never auto-applied (they live outside the server's config files).
+         */
+        public boolean isAutoApplicable() {
+            return getApplyValue() != null;
+        }
+
+        /**
+         * The literal value {@code /os tune apply} writes, or {@code null} when not auto-applicable.
+         */
+        public String getApplyValue() {
+            if (file == null || recommendedValue == null) {
+                return null;
+            }
+            boolean configFile = "server.properties".equals(file) || file.endsWith(".yml");
+            if (!configFile) {
+                return null;
+            }
+            String value = recommendedValue;
+            int paren = value.indexOf(" (");
+            if (paren > 0) {
+                value = value.substring(0, paren);
+            }
+            value = value.trim();
+            return value.matches("-?\\d+|true|false|[a-z0-9][a-z0-9_-]*") ? value : null;
+        }
     }
 
     public static final class CapacityAssessment {

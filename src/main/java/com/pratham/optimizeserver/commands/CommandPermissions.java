@@ -16,6 +16,7 @@ public final class CommandPermissions {
     public static final String CHUNKS = "optimizeserver.chunks";
     public static final String REPORT = "optimizeserver.report";
     public static final String RELOAD = "optimizeserver.reload";
+    public static final String TUNE_APPLY = "optimizeserver.tune.apply";
 
     private CommandPermissions() {
     }

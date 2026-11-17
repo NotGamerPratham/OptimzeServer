@@ -48,7 +48,7 @@ public final class DependencyAutoInstaller {
             "https://api.modrinth.com/v2/project/chunky/version?loaders=%5B%22bukkit%22,%22paper%22,%22spigot%22,%22folia%22%5D";
     public static final String DEFAULT_CHUNKY_FALLBACK_URL = "https://api.spiget.org/v2/resources/81534/download";
 
-    private static final String DEFAULT_PLUGIN_VERSION = "1.4.0";
+    private static final String DEFAULT_PLUGIN_VERSION = "1.5.0";
     private static final Pattern MODRINTH_URL_PATTERN = Pattern.compile("\"url\"\\s*:\\s*\"(https://cdn\\.modrinth\\.com/[^\"]+\\.jar)\"");
     private static final Pattern MODRINTH_SHA512_PATTERN = Pattern.compile("\"sha512\"\\s*:\\s*\"([0-9a-fA-F]{128})\"");
 
