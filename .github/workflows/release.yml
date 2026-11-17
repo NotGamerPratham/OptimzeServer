@@ -20,10 +20,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
-      # Optional: set repository secret MODRINTH_TOKEN (scope: "Create versions")
-      # and repository variable MODRINTH_PROJECT_ID to enable Modrinth publishing.
+      # Optional: set repository secret MODRINTH_TOKEN (scope: "Create versions") to enable Modrinth publishing.
+      # MODRINTH_PROJECT_ID may be a project ID or slug and defaults to the public project slug.
       MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
-      MODRINTH_PROJECT_ID: ${{ vars.MODRINTH_PROJECT_ID }}
+      MODRINTH_PROJECT_ID: ${{ vars.MODRINTH_PROJECT_ID || 'optimizeserver-notgamerpratham' }}
 
     steps:
       - name: Checkout tag
@@ -104,8 +104,16 @@ jobs:
           FLOOR_DATE=$(jq -r '.[] | select(.version=="1.8.8") | .date' game_versions.json)
           GAME_VERSIONS=$(jq -c --arg d "$FLOOR_DATE" '[.[] | select(.version_type=="release" and .date >= $d) | .version]' game_versions.json)
 
+          # Resolve a slug (or ID) to the canonical project ID; authorized so draft/unlisted projects resolve too.
+          PROJECT_ID=$(curl -fsSL -A "$UA" -H "Authorization: $MODRINTH_TOKEN" \
+            "https://api.modrinth.com/v2/project/$MODRINTH_PROJECT_ID" | jq -r '.id')
+          if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "null" ]; then
+            echo "::error::Could not resolve Modrinth project $MODRINTH_PROJECT_ID with the provided token"
+            exit 1
+          fi
+
           jq -n \
-            --arg project "$MODRINTH_PROJECT_ID" \
+            --arg project "$PROJECT_ID" \
             --arg version "$VERSION" \
             --rawfile changelog RELEASE_NOTES.md \
             --argjson games "$GAME_VERSIONS" \
@@ -138,7 +146,7 @@ jobs:
 
       - name: Modrinth publishing skipped
         if: env.MODRINTH_TOKEN == '' || env.MODRINTH_PROJECT_ID == ''
-        run: echo "::notice::Modrinth upload skipped - set secret MODRINTH_TOKEN and variable MODRINTH_PROJECT_ID to enable it."
+        run: echo "::notice::Modrinth upload skipped - add the MODRINTH_TOKEN repository secret to enable it."
 
       - name: SpigotMC upload reminder
         run: |

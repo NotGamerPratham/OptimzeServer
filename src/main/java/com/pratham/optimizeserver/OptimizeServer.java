@@ -58,7 +58,7 @@ public final class OptimizeServer extends JavaPlugin {
 
             PluginCommand cmd = getCommand("optimizeserver");
             if (cmd != null) {
-                String version = getDescription() != null ? getDescription().getVersion() : "1.3.0";
+                String version = getDescription() != null ? getDescription().getVersion() : "1.5.0";
                 OptimizeServerCommand executor = new OptimizeServerCommand(performanceEngine, version);
                 cmd.setExecutor(executor);
                 cmd.setTabCompleter(executor);

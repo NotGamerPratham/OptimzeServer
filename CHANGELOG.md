@@ -2,9 +2,25 @@
 
 All notable changes to **OptimizeServer** will be documented in this file.
 
-## [Unreleased]
+## [1.5.0] - 2026-11-17
 
 ### Added
+- **`/os tune apply`:** previews the gameplay-neutral config fixes found by `/os tune`, then writes them to `server.properties`, `bukkit.yml`, `spigot.yml`, and Paper configs after `/os tune apply confirm` (within 60 seconds). Every touched file is backed up to `plugins/OptimizeServer/backups/<timestamp>/` first, edits are line-based so comments and formatting are kept, only keys that already exist are changed, and files are replaced atomically. JVM flags, Java version, and server-jar advice stay manual. Settings take effect after a restart.
+- **`/os tune restore`:** restores the config files from the most recent `/os tune apply` backup.
+- New permission `optimizeserver.tune.apply` (default: op, included in `optimizeserver.admin`).
+- `/os tune` now says how many of its suggestions `/os tune apply` can write.
+
+### Changed
+- `.claude/` (local Claude Code worktrees and settings) is now git-ignored.
+
+## [1.4.0] - 2026-11-17
+
+### Added
+- **Lag spike recorder (`/os spikes [page|clear]`):** every tick slower than `monitoring.lag-spikes.threshold-ms` (default 100 ms) is captured with the loaded chunks, entities, players, heap usage, and garbage-collection time at that moment, plus a likely cause (GC pause, world generation, heap pressure). Keeps the last 50 spikes and logs a cooldown-limited console warning. Costs one comparison per normal tick.
+- **Ticking block entities:** on Paper, `/os entities`, `/os worlds`, and entity diagnostics now show how many block entities tick every tick (hoppers, furnaces, spawners) separately from inert ones, via `World#getTickableTileEntityCount()`.
+- **Per-world breakdown (`/os worlds`):** loaded chunks, entities, block entities, and players for each world, so you can see which world carries the load.
+- **More `/os tune` checks:** suggests Java 21 for Minecraft 1.20+ servers on older Java (and Java 11 for Paper 1.16.5 on Java 8), flags `-Xmn` / fixed `NewSize` and `MaxGCPauseMillis` above 200 ms under G1, and now checks `sync-chunk-writes` on Spigot 1.16+ too.
+- **Release workflow:** Modrinth publishing now needs only the `MODRINTH_TOKEN` secret; the project slug is resolved to its ID automatically (override with the `MODRINTH_PROJECT_ID` variable).
 - Added container-safe heap reservation (`resolveSafeHeapTargetMb`) for `-XX:MaxRAMPercentage` / Pterodactyl / Docker hosts (reserving 20-25% off-heap headroom and omitting `-XX:+AlwaysPreTouch` inside container-managed heaps to prevent cgroup Exit 137 OOM kills) and `settings.netty-threads` 2-core auditing.
 - **Console logger formatting:** Wrapped Bukkit/Paper `PluginLogger` in `OptimizeServer` to strip redundant `[OptimizeServer]` / normalize `[OptimizeServer Alert]` prefixes so console lines never print `[OptimizeServer] [OptimizeServer]`.
 

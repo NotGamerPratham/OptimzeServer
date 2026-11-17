@@ -56,6 +56,7 @@ public final class MetricSnapshot {
     // Entity Metrics
     private final int totalEntities;
     private final int tileEntityCount;
+    private final int tickableTileEntityCount;
     private final Map<String, Integer> entitiesByType;
     private final Map<String, Integer> entitiesByWorld;
 
@@ -104,6 +105,7 @@ public final class MetricSnapshot {
         this.chunkGenRatePerSec = b.chunkGenRatePerSec;
         this.totalEntities = b.totalEntities;
         this.tileEntityCount = b.tileEntityCount;
+        this.tickableTileEntityCount = b.tickableTileEntityCount;
         // Monitor-published maps are already frozen and shared by reference; anything else is copied
         this.entitiesByType = FrozenCounts.share(b.entitiesByType);
         this.entitiesByWorld = FrozenCounts.share(b.entitiesByWorld);
@@ -164,6 +166,8 @@ public final class MetricSnapshot {
     public double getChunkGenRatePerSec() { return chunkGenRatePerSec; }
     public int getTotalEntities() { return totalEntities; }
     public int getTileEntityCount() { return tileEntityCount; }
+    /** Ticking block entities (hoppers, furnaces, ...), or -1 when the server cannot report them. */
+    public int getTickableTileEntityCount() { return tickableTileEntityCount; }
     public Map<String, Integer> getEntitiesByType() { return entitiesByType; }
     public Map<String, Integer> getEntitiesByWorld() { return entitiesByWorld; }
     public int getPendingServerTasks() { return pendingServerTasks; }
@@ -210,6 +214,7 @@ public final class MetricSnapshot {
         private double chunkGenRatePerSec = 0.0;
         private int totalEntities = 0;
         private int tileEntityCount = 0;
+        private int tickableTileEntityCount = -1;
         private Map<String, Integer> entitiesByType;
         private Map<String, Integer> entitiesByWorld;
         private int pendingServerTasks = 0;
@@ -255,6 +260,7 @@ public final class MetricSnapshot {
         public Builder chunkGenRatePerSec(double val) { this.chunkGenRatePerSec = val; return this; }
         public Builder totalEntities(int val) { this.totalEntities = val; return this; }
         public Builder tileEntityCount(int val) { this.tileEntityCount = val; return this; }
+        public Builder tickableTileEntityCount(int val) { this.tickableTileEntityCount = val; return this; }
         public Builder entitiesByType(Map<String, Integer> val) { this.entitiesByType = val; return this; }
         public Builder entitiesByWorld(Map<String, Integer> val) { this.entitiesByWorld = val; return this; }
         public Builder pendingServerTasks(int val) { this.pendingServerTasks = val; return this; }

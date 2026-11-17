@@ -4,6 +4,7 @@ import com.pratham.optimizeserver.analyzer.BottleneckCategory;
 import com.pratham.optimizeserver.analyzer.DiagnosticCoordinator;
 import com.pratham.optimizeserver.analyzer.DiagnosticFinding;
 import com.pratham.optimizeserver.analyzer.RecommendationEngine;
+import com.pratham.optimizeserver.analyzer.ServerConfigApplier;
 import com.pratham.optimizeserver.analyzer.ServerConfigAuditor;
 import com.pratham.optimizeserver.compatibility.CompatibilityReport;
 import com.pratham.optimizeserver.core.PerformanceEngine;
@@ -35,7 +36,8 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
 
     private static final List<String> ROOT_SUBCOMMANDS = Arrays.asList(
             "help", "version", "status", "tps", "mspt", "cpu", "memory", "network",
-            "chunks", "entities", "diagnose", "profile", "health", "optimize", "tune", "capacity", "report", "reload"
+            "chunks", "entities", "worlds", "spikes", "diagnose", "profile", "health", "optimize", "tune", "capacity",
+            "report", "reload"
     );
 
     private static final List<String> DIAGNOSE_SUBCOMMANDS = Arrays.asList(
@@ -63,7 +65,7 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
 
     public OptimizeServerCommand(PerformanceEngine engine, String pluginVersion) {
         this.engine = engine;
-        this.pluginVersion = pluginVersion != null ? pluginVersion : "1.3.0";
+        this.pluginVersion = pluginVersion != null ? pluginVersion : "1.5.0";
     }
 
     @Override
@@ -132,6 +134,22 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
         }
         if ("chunks".equals(sub)) {
             handleChunks(sender, args);
+            return true;
+        }
+        if ("worlds".equals(sub)) {
+            if (!requirePermission(sender, CommandPermissions.STATUS)) return true;
+            handleWorlds(sender);
+            return true;
+        }
+        if ("spikes".equals(sub)) {
+            if (!requirePermission(sender, CommandPermissions.STATUS)) return true;
+            if (args.length >= 2 && "clear".equalsIgnoreCase(args[1])) {
+                if (!requirePermission(sender, CommandPermissions.DIAGNOSE)) return true;
+                engine.getLagSpikeRecorder().clear();
+                sender.sendMessage(ChatColor.GREEN + "[OptimizeServer] Lag spike history cleared.");
+                return true;
+            }
+            handleSpikes(sender, args.length >= 2 ? parsePage(args[1], 1) : 1);
             return true;
         }
         if ("diagnose".equals(sub)) {
@@ -203,11 +221,15 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
                 ChatColor.YELLOW + "/os network" + ChatColor.GRAY + " - Display player RTT ping vs server tick/packet overhead",
                 ChatColor.YELLOW + "/os chunks [status|recommend|start|pause|cancel]" + ChatColor.GRAY + " - Chunk metrics & Chunky control",
                 ChatColor.YELLOW + "/os entities" + ChatColor.GRAY + " - Display entity and block-entity distributions",
+                ChatColor.YELLOW + "/os worlds" + ChatColor.GRAY + " - Per-world chunks, entities, block entities, and players",
+                ChatColor.YELLOW + "/os spikes [page|clear]" + ChatColor.GRAY + " - Recent lag spikes with their context and likely cause",
                 ChatColor.YELLOW + "/os diagnose [full|cpu|memory|chunks|entities|plugins]" + ChatColor.GRAY + " - Bottleneck analysis",
                 ChatColor.YELLOW + "/os profile <start|stop|status|memory>" + ChatColor.GRAY + " - Spark profiler control",
                 ChatColor.YELLOW + "/os health" + ChatColor.GRAY + " - Comprehensive server and Spark health overview",
                 ChatColor.YELLOW + "/os optimize [status|list|enable|disable|rollback]" + ChatColor.GRAY + " - Hybrid optimization control",
                 ChatColor.YELLOW + "/os tune [page]" + ChatColor.GRAY + " - Audit server configs & generate non-gameplay-altering presets",
+                ChatColor.YELLOW + "/os tune apply [confirm]" + ChatColor.GRAY + " - Write the gameplay-neutral config fixes (backed up first)",
+                ChatColor.YELLOW + "/os tune restore" + ChatColor.GRAY + " - Undo the last /os tune apply from its backup",
                 ChatColor.YELLOW + "/os capacity" + ChatColor.GRAY + " - Inspect RAM/OldGen headroom and safe player capacity",
                 ChatColor.YELLOW + "/os report <generate|history>" + ChatColor.GRAY + " - Generate or list local diagnostic reports",
                 ChatColor.YELLOW + "/os reload" + ChatColor.GRAY + " - Reload and re-validate config.yml"
@@ -325,11 +347,102 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
     private void handleEntities(CommandSender sender) {
         MetricSnapshot s = engine.getLatestSnapshot();
         sender.sendMessage(ChatColor.DARK_AQUA + "=== " + ChatColor.AQUA + "Entity & Block-Entity Telemetry" + ChatColor.DARK_AQUA + " ===");
+        String tickable = s.getTickableTileEntityCount() >= 0
+                ? ChatColor.GRAY + " (" + ChatColor.WHITE + s.getTickableTileEntityCount() + ChatColor.GRAY + " ticking)"
+                : "";
         sender.sendMessage(ChatColor.GRAY + "Total Entities: " + ChatColor.WHITE + s.getTotalEntities()
-                + ChatColor.GRAY + " | Tile/Block Entities: " + ChatColor.WHITE + s.getTileEntityCount());
+                + ChatColor.GRAY + " | Tile/Block Entities: " + ChatColor.WHITE + s.getTileEntityCount() + tickable);
         sender.sendMessage(ChatColor.GRAY + "Distribution by World: " + ChatColor.WHITE + s.getEntitiesByWorld());
         sender.sendMessage(ChatColor.GRAY + "Distribution by Type : " + ChatColor.WHITE + s.getEntitiesByType());
         sender.sendMessage(ChatColor.GRAY + "Gameplay Policy: Read-only monitoring; OptimizeServer never removes entities or disables mob AI.");
+    }
+
+    private void handleWorlds(CommandSender sender) {
+        sender.sendMessage(ChatColor.DARK_AQUA + "=== " + ChatColor.AQUA + "Per-World Load Breakdown" + ChatColor.DARK_AQUA + " ===");
+        if (engine.getScheduler() != null && engine.getScheduler().isRegionThreaded()) {
+            sender.sendMessage(ChatColor.GRAY + "Per-world counts are unavailable on Folia: worlds are owned by many region threads, so they are not enumerated globally.");
+            return;
+        }
+        Map<String, Integer> chunks = engine.getChunkMonitor().getChunksByWorld();
+        Map<String, Integer> entities = engine.getEntityMonitor().getEntitiesByWorld();
+        Map<String, Integer> tiles = engine.getEntityMonitor().getTilesByWorld();
+        Map<String, Integer> tickable = engine.getEntityMonitor().getTickableTilesByWorld();
+        Map<String, Integer> players = engine.getEntityMonitor().getPlayersByWorld();
+        java.util.Set<String> names = new java.util.TreeSet<String>();
+        names.addAll(chunks.keySet());
+        names.addAll(entities.keySet());
+        names.addAll(players.keySet());
+        if (names.isEmpty()) {
+            sender.sendMessage(ChatColor.GRAY + "No world sample yet; data refreshes every few seconds.");
+            return;
+        }
+        String heaviest = null;
+        int heaviestChunks = -1;
+        for (String name : names) {
+            int c = valueOf(chunks, name);
+            if (c > heaviestChunks) {
+                heaviestChunks = c;
+                heaviest = name;
+            }
+            String tickableText = tickable.containsKey(name)
+                    ? ChatColor.GRAY + " (" + ChatColor.WHITE + valueOf(tickable, name) + ChatColor.GRAY + " ticking)"
+                    : "";
+            sender.sendMessage(ChatColor.YELLOW + name + ChatColor.GRAY + ": "
+                    + ChatColor.WHITE + c + ChatColor.GRAY + " chunks | "
+                    + ChatColor.WHITE + valueOf(entities, name) + ChatColor.GRAY + " entities | "
+                    + ChatColor.WHITE + valueOf(tiles, name) + ChatColor.GRAY + " block entities" + tickableText + " | "
+                    + ChatColor.WHITE + valueOf(players, name) + ChatColor.GRAY + " players");
+        }
+        if (heaviest != null && names.size() > 1) {
+            sender.sendMessage(ChatColor.GRAY + "Most loaded chunks: " + ChatColor.WHITE + heaviest
+                    + ChatColor.GRAY + ". Read-only view; OptimizeServer never unloads worlds or chunks.");
+        }
+    }
+
+    private static int valueOf(Map<String, Integer> map, String key) {
+        Integer v = map != null ? map.get(key) : null;
+        return v != null ? v.intValue() : 0;
+    }
+
+    private void handleSpikes(CommandSender sender, int page) {
+        com.pratham.optimizeserver.monitoring.LagSpikeRecorder recorder = engine.getLagSpikeRecorder();
+        sender.sendMessage(ChatColor.DARK_AQUA + "=== " + ChatColor.AQUA + "Lag Spikes" + ChatColor.DARK_AQUA + " ===");
+        if (!recorder.isEnabled()) {
+            sender.sendMessage(ChatColor.GRAY + "Lag spike recording is disabled (monitoring.lag-spikes.enabled).");
+            return;
+        }
+        long now = System.currentTimeMillis();
+        sender.sendMessage(String.format(Locale.ROOT,
+                ChatColor.GRAY + "Threshold: " + ChatColor.WHITE + "%.0f ms"
+                        + ChatColor.GRAY + " | Last 10 min: " + ChatColor.WHITE + "%d"
+                        + ChatColor.GRAY + " | Last hour: " + ChatColor.WHITE + "%d"
+                        + ChatColor.GRAY + " | Since start: " + ChatColor.WHITE + "%d"
+                        + ChatColor.GRAY + " | Worst: " + ChatColor.WHITE + "%.0f ms",
+                recorder.getThresholdMs(), recorder.countSince(now - 600_000L), recorder.countSince(now - 3_600_000L),
+                recorder.getTotalSpikes(), recorder.getWorstMs()));
+        List<com.pratham.optimizeserver.monitoring.LagSpikeRecorder.LagSpike> spikes = recorder.getRecentSpikes(Integer.MAX_VALUE);
+        if (spikes.isEmpty()) {
+            sender.sendMessage(ChatColor.GREEN + "No ticks over the threshold have been recorded.");
+            return;
+        }
+        List<String> lines = new ArrayList<String>();
+        for (com.pratham.optimizeserver.monitoring.LagSpikeRecorder.LagSpike spike : spikes) {
+            lines.add(String.format(Locale.ROOT,
+                    ChatColor.YELLOW + "%s ago" + ChatColor.GRAY + ": " + ChatColor.RED + "%.0f ms"
+                            + ChatColor.GRAY + " | %d chunks, %d entities, %d players, heap %.0f%%, GC %d ms"
+                            + ChatColor.GRAY + " -> " + ChatColor.WHITE + "%s",
+                    formatAgo(now - spike.getTimestampMillis()), spike.getDurationMs(), spike.getLoadedChunks(),
+                    spike.getTotalEntities(), spike.getOnlinePlayers(), spike.getHeapUsagePercent(),
+                    spike.getGcMsSinceLastSample(), spike.getLikelyCause()));
+        }
+        CommandPagination.sendPaginated(sender, "Recent Lag Spikes (newest first)", lines, page, 8, "/os spikes");
+    }
+
+    private static String formatAgo(long millis) {
+        long sec = Math.max(0L, millis / 1000L);
+        if (sec < 60L) return sec + "s";
+        if (sec < 3600L) return (sec / 60L) + "m";
+        return (sec / 3600L) + "h" + ((sec % 3600L) / 60L) + "m";
     }
 
     private void handleChunks(CommandSender sender, String[] args) {
@@ -574,7 +687,139 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
         sender.sendMessage(ChatColor.RED + "Usage: /os optimize <status|list|enable <id>|disable <id>|rollback <id>>");
     }
 
+    /** Pending /os tune apply confirmations: sender name -> expiry millis. */
+    private final Map<String, Long> pendingTuneApply = new java.util.concurrent.ConcurrentHashMap<String, Long>();
+    private static final long TUNE_CONFIRM_WINDOW_MS = 60_000L;
+
+    /** Runs file I/O work off the tick thread on live servers, inline in headless tests. */
+    private void runIo(final Runnable work) {
+        if (engine.shouldOffloadAsyncIo()) {
+            engine.getScheduler().runAsync(work);
+        } else {
+            work.run();
+        }
+    }
+
+    /** Delivers messages on the global/main thread on live servers, inline in headless tests. */
+    private void deliver(final CommandSender sender, final List<String> messages) {
+        Runnable send = new Runnable() {
+            @Override
+            public void run() {
+                for (String m : messages) {
+                    sender.sendMessage(m);
+                }
+            }
+        };
+        if (engine.shouldOffloadAsyncIo()) {
+            engine.getScheduler().runGlobal(send);
+        } else {
+            send.run();
+        }
+    }
+
+    private void handleTuneApply(final CommandSender sender, String[] args) {
+        if (!requirePermission(sender, CommandPermissions.TUNE_APPLY)) {
+            return;
+        }
+        final String who = sender.getName() != null ? sender.getName() : "console";
+        boolean confirming = args.length >= 3 && "confirm".equalsIgnoreCase(args[2]);
+        if (confirming) {
+            Long expiry = pendingTuneApply.remove(who);
+            if (expiry == null || expiry.longValue() < System.currentTimeMillis()) {
+                sender.sendMessage(ChatColor.RED + "[OptimizeServer] No pending change set. Run "
+                        + ChatColor.YELLOW + "/os tune apply" + ChatColor.RED + " first, then confirm within 60 seconds.");
+                return;
+            }
+            sender.sendMessage(ChatColor.GRAY + "[OptimizeServer] Applying tuning changes (backing up files first)...");
+            runIo(new Runnable() {
+                @Override
+                public void run() {
+                    ServerConfigApplier.ApplyResult result = engine.applyTuneSuggestions(engine.auditServerConfig());
+                    List<String> out = new ArrayList<String>();
+                    out.add(ChatColor.DARK_AQUA + "=== " + ChatColor.AQUA + "Tuning Applied" + ChatColor.DARK_AQUA + " ===");
+                    if (result.getApplied().isEmpty()) {
+                        out.add(ChatColor.GREEN + "Nothing needed changing.");
+                    }
+                    for (String a : result.getApplied()) {
+                        out.add(ChatColor.GREEN + "  + " + ChatColor.WHITE + a);
+                    }
+                    for (String s : result.getSkipped()) {
+                        out.add(ChatColor.YELLOW + "  - skipped " + ChatColor.GRAY + s);
+                    }
+                    if (result.getBackupDir() != null) {
+                        out.add(ChatColor.GRAY + "Backup: " + ChatColor.YELLOW + result.getBackupDir().getPath()
+                                + ChatColor.GRAY + " (undo with " + ChatColor.YELLOW + "/os tune restore" + ChatColor.GRAY + ")");
+                        out.add(ChatColor.GOLD + "Restart the server for these settings to take effect.");
+                    }
+                    out.add(ChatColor.GRAY + "JVM flags can't be changed by a plugin; copy them from plugins/OptimizeServer/presets/recommended-jvm-flags.txt into your start script.");
+                    deliver(sender, out);
+                }
+            });
+            return;
+        }
+
+        runIo(new Runnable() {
+            @Override
+            public void run() {
+                ServerConfigAuditor.AuditReport audit = engine.auditServerConfig();
+                List<ServerConfigAuditor.TuningSuggestion> changes = ServerConfigApplier.applicable(audit);
+                List<String> out = new ArrayList<String>();
+                out.add(ChatColor.DARK_AQUA + "=== " + ChatColor.AQUA + "Tune Apply Preview" + ChatColor.DARK_AQUA + " ===");
+                if (changes.isEmpty()) {
+                    out.add(ChatColor.GREEN + "No config-file changes to apply; everything auto-applicable is already tuned.");
+                    deliver(sender, out);
+                    return;
+                }
+                for (ServerConfigAuditor.TuningSuggestion s : changes) {
+                    out.add(ChatColor.YELLOW + "[" + s.getFile() + "] " + ChatColor.WHITE + s.getKey()
+                            + ChatColor.GRAY + ": " + s.getCurrentValue() + " -> " + ChatColor.GREEN + s.getApplyValue());
+                }
+                int manual = audit.getSuggestions().size() - changes.size();
+                if (manual > 0) {
+                    out.add(ChatColor.GRAY + "" + manual + " other suggestion(s) (JVM flags, Java, server jar) must be applied by hand; see /os tune.");
+                }
+                out.add(ChatColor.GRAY + "All of these are gameplay-neutral. Each file is backed up first; undo any time with "
+                        + ChatColor.YELLOW + "/os tune restore" + ChatColor.GRAY + ".");
+                out.add(ChatColor.GOLD + "Type " + ChatColor.YELLOW + "/os tune apply confirm" + ChatColor.GOLD + " within 60 seconds to write these changes.");
+                pendingTuneApply.put(who, Long.valueOf(System.currentTimeMillis() + TUNE_CONFIRM_WINDOW_MS));
+                deliver(sender, out);
+            }
+        });
+    }
+
+    private void handleTuneRestore(final CommandSender sender) {
+        if (!requirePermission(sender, CommandPermissions.TUNE_APPLY)) {
+            return;
+        }
+        runIo(new Runnable() {
+            @Override
+            public void run() {
+                List<String> out = new ArrayList<String>();
+                try {
+                    List<String> restored = engine.restoreLatestTuneBackup();
+                    if (restored.isEmpty()) {
+                        out.add(ChatColor.YELLOW + "[OptimizeServer] No /os tune apply backup found to restore.");
+                    } else {
+                        out.add(ChatColor.GREEN + "[OptimizeServer] Restored from the latest backup: " + ChatColor.WHITE + restored);
+                        out.add(ChatColor.GOLD + "Restart the server for the restored settings to take effect.");
+                    }
+                } catch (IOException ex) {
+                    out.add(ChatColor.RED + "[OptimizeServer] Restore failed: " + ex.getMessage());
+                }
+                deliver(sender, out);
+            }
+        });
+    }
+
     private void handleTune(final CommandSender sender, String[] args) {
+        if (args.length >= 2 && "apply".equalsIgnoreCase(args[1])) {
+            handleTuneApply(sender, args);
+            return;
+        }
+        if (args.length >= 2 && "restore".equalsIgnoreCase(args[1])) {
+            handleTuneRestore(sender);
+            return;
+        }
         final int page = args.length >= 2 ? parsePage(args[1], 1) : 1;
         if (engine.shouldOffloadAsyncIo()) {
             sender.sendMessage(ChatColor.GRAY + "[OptimizeServer] Auditing server configurations asynchronously...");
@@ -628,6 +873,11 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
         }
         CommandPagination.sendPaginated(sender, "Zero-Gameplay-Impact Config Audit", lines, page, 8, "/os tune");
         sender.sendMessage(ChatColor.GRAY + "Recommended JVM Flags: " + ChatColor.AQUA + audit.getRecommendedJvmCommand());
+        int applicable = ServerConfigApplier.applicable(audit).size();
+        if (applicable > 0) {
+            sender.sendMessage(ChatColor.GOLD + "" + applicable + " of these can be written to your config files with "
+                    + ChatColor.YELLOW + "/os tune apply" + ChatColor.GOLD + " (backed up first).");
+        }
         if (presetFile != null) {
             sender.sendMessage(ChatColor.GRAY + "Saved safe preset sheet to: " + ChatColor.YELLOW + presetFile.getPath());
         } else if (presetError != null) {
@@ -727,6 +977,11 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
             if ("optimize".equals(sub)) return filterPrefix(OPTIMIZE_SUBCOMMANDS, args[1]);
             if ("chunks".equals(sub)) return filterPrefix(CHUNKS_SUBCOMMANDS, args[1]);
             if ("report".equals(sub)) return filterPrefix(REPORT_SUBCOMMANDS, args[1]);
+            if ("tune".equals(sub)) return filterPrefix(Arrays.asList("apply", "restore", "1", "2"), args[1]);
+            if ("spikes".equals(sub)) return filterPrefix(Arrays.asList("1", "2", "clear"), args[1]);
+        }
+        if (args.length == 3 && "tune".equalsIgnoreCase(args[0]) && "apply".equalsIgnoreCase(args[1])) {
+            return filterPrefix(Collections.singletonList("confirm"), args[2]);
         }
         if (args.length == 3 && "optimize".equalsIgnoreCase(args[0])) {
             String action = args[1].toLowerCase(Locale.ROOT);

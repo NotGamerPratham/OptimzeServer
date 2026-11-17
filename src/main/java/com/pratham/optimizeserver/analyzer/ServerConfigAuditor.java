@@ -59,6 +59,35 @@ public final class ServerConfigAuditor {
         public String getCurrentValue() { return currentValue; }
         public String getRecommendedValue() { return recommendedValue; }
         public String getReason() { return reason; }
+
+        /**
+         * True when this suggestion targets an on-disk server config file and carries a plain
+         * value that {@code /os tune apply} can write. JVM flags, Java version, and server-jar
+         * advice are never auto-applied (they live outside the server's config files).
+         */
+        public boolean isAutoApplicable() {
+            return getApplyValue() != null;
+        }
+
+        /**
+         * The literal value {@code /os tune apply} writes, or {@code null} when not auto-applicable.
+         */
+        public String getApplyValue() {
+            if (file == null || recommendedValue == null) {
+                return null;
+            }
+            boolean configFile = "server.properties".equals(file) || file.endsWith(".yml");
+            if (!configFile) {
+                return null;
+            }
+            String value = recommendedValue;
+            int paren = value.indexOf(" (");
+            if (paren > 0) {
+                value = value.substring(0, paren);
+            }
+            value = value.trim();
+            return value.matches("-?\\d+|true|false|[a-z0-9][a-z0-9_-]*") ? value : null;
+        }
     }
 
     public static final class CapacityAssessment {
@@ -152,6 +181,8 @@ public final class ServerConfigAuditor {
 
         auditPlatform(platform, suggestions);
         auditJvm(jvm, capacity.getHeapMaxMb(), suggestions);
+        auditJavaVersion(jvm, compat, platform, suggestions);
+        auditG1Hygiene(jvm, suggestions);
 
         Properties serverProps = loadProperties(new File(resolvedRoot, "server.properties"));
         YamlConfiguration bukkitYml = loadYaml(new File(resolvedRoot, "bukkit.yml"));
@@ -364,6 +395,69 @@ public final class ServerConfigAuditor {
         }
     }
 
+    /**
+     * Newer LTS JVMs ship faster GCs and JIT for the same Minecraft bytecode; only versions the server line supports are suggested.
+     */
+    public void auditJavaVersion(JavaRuntimeInfo jvm, CompatibilityReport compat, ServerPlatform platform, List<TuningSuggestion> out) {
+        if (jvm == null || compat == null || compat.getMinecraftVersion() == null) {
+            return;
+        }
+        int java = jvm.getFeatureVersion();
+        boolean mc120 = compat.getMinecraftVersion().isAtLeast(1, 20, 0);
+        boolean mc116Only = compat.getMinecraftVersion().isAtLeast(1, 16, 0) && !compat.getMinecraftVersion().isAtLeast(1, 17, 0);
+        if (mc120 && java > 0 && java < 21) {
+            out.add(new TuningSuggestion(
+                    "java-runtime",
+                    "Java version",
+                    "Java " + java,
+                    "Java 21 (LTS)",
+                    "Minecraft 1.20+ servers run on Java 21, whose G1/ZGC and JIT improvements lower GC pauses and CPU use with identical gameplay."
+            ));
+        } else if (mc116Only && platform != null && platform.isPaperCompatible() && java == 8) {
+            out.add(new TuningSuggestion(
+                    "java-runtime",
+                    "Java version",
+                    "Java 8",
+                    "Java 11 (LTS)",
+                    "Paper 1.16.5 supports Java 11, which has a markedly better G1 collector than Java 8 for the same worlds and plugins."
+            ));
+        }
+    }
+
+    /**
+     * Flags G1 settings that defeat its pause-time tuning.
+     */
+    public void auditG1Hygiene(JavaRuntimeInfo jvm, List<TuningSuggestion> out) {
+        if (jvm == null || !jvm.isUsingG1GC()) {
+            return;
+        }
+        for (String arg : jvm.getJvmArguments()) {
+            if (arg.startsWith("-Xmn") || arg.startsWith("-XX:NewSize=") || arg.startsWith("-XX:MaxNewSize=")) {
+                out.add(new TuningSuggestion(
+                        "startup-flags",
+                        arg.startsWith("-Xmn") ? "-Xmn" : arg.substring(0, arg.indexOf('=') + 1),
+                        arg,
+                        "Remove (use -XX:G1NewSizePercent / G1MaxNewSizePercent instead)",
+                        "A fixed young generation stops G1 from resizing it to meet MaxGCPauseMillis, causing longer stop-the-world pauses."
+                ));
+            } else if (arg.startsWith("-XX:MaxGCPauseMillis=")) {
+                try {
+                    int pause = Integer.parseInt(arg.substring("-XX:MaxGCPauseMillis=".length()).trim());
+                    if (pause > 200) {
+                        out.add(new TuningSuggestion(
+                                "startup-flags",
+                                "-XX:MaxGCPauseMillis",
+                                String.valueOf(pause),
+                                "130",
+                                "A pause target above 200 ms lets single GC pauses eat several ticks; 130 ms keeps them within a few ticks."
+                        ));
+                    }
+                } catch (NumberFormatException ignored) {
+                }
+            }
+        }
+    }
+
     private void auditServerProperties(Properties props,
                                        ServerPlatform platform,
                                        boolean behindProxy,
@@ -373,7 +467,10 @@ public final class ServerConfigAuditor {
             return;
         }
         String syncWrites = props.getProperty("sync-chunk-writes");
-        if (platform.isPaperCompatible() && "true".equalsIgnoreCase(syncWrites)) {
+        // sync-chunk-writes is a vanilla 1.16+ property, so Spigot benefits as well as Paper
+        boolean syncWritesSupported = platform.isPaperCompatible()
+                || (compat != null && compat.getMinecraftVersion() != null && compat.getMinecraftVersion().isAtLeast(1, 16, 0));
+        if (syncWritesSupported && "true".equalsIgnoreCase(syncWrites)) {
             out.add(new TuningSuggestion(
                     "server.properties",
                     "sync-chunk-writes",

@@ -206,6 +206,11 @@ public final class BottleneckAnalyzer {
 
             List<String> ev = new ArrayList<String>();
             ev.add("Total tracked entities: " + s.getTotalEntities() + " (block/tile entities: " + s.getTileEntityCount() + ").");
+            if (s.getTickableTileEntityCount() >= 0) {
+                metrics.put("tickableTileEntityCount", String.valueOf(s.getTickableTileEntityCount()));
+                ev.add("Ticking block entities (hoppers, furnaces, spawners...): " + s.getTickableTileEntityCount()
+                        + " of " + s.getTileEntityCount() + "; these run every tick, inert ones (signs, banners) cost nothing per tick.");
+            }
             String topType = findDominantKey(s.getEntitiesByType());
             if (topType != null) {
                 ev.add("Dominant entity type: " + topType + " (" + s.getEntitiesByType().get(topType) + " instances).");

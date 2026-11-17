@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**OptimizeServer** (`com.pratham:optimizeserver`, version `1.3.0`, authored by `NotGamerPratham`) is a Minecraft Java Edition server performance engineering, bottleneck diagnostics, and non-invasive execution optimization plugin (`api-version: '1.13'`, `folia-supported: true`, `load: POSTWORLD`).
+**OptimizeServer** (`com.pratham:optimizeserver`, version `1.5.0`, authored by `NotGamerPratham`) is a Minecraft Java Edition server performance engineering, bottleneck diagnostics, and non-invasive execution optimization plugin (`api-version: '1.13'`, `folia-supported: true`, `load: POSTWORLD`).
 
 Its core rule is **zero intentional gameplay modification**: every feature improves monitoring/diagnostic efficiency, server/JVM tuning guidance, or async offloading while preserving 100% of vanilla Minecraft semantics.
 

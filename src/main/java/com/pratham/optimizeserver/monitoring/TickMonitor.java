@@ -40,6 +40,7 @@ public final class TickMonitor {
     private volatile double latestTps5m = 20.0;
     private volatile double latestTps15m = 20.0;
     private volatile RollingWindow.WindowStats latestMsptStats = RollingWindow.WindowStats.EMPTY;
+    private volatile LagSpikeRecorder spikeRecorder;
 
     public TickMonitor(Server server, PlatformCapabilities capabilities, MetricRegistry metricRegistry) {
         this.server = server;
@@ -83,6 +84,17 @@ public final class TickMonitor {
         metricRegistry.recordTickDurationMs(Math.max(0.0, tickDurationMs), nowNanos);
         tickEventCount++;
         lastTickNanos = nowNanos;
+        LagSpikeRecorder recorder = this.spikeRecorder;
+        if (recorder != null) {
+            recorder.onTick(tickDurationMs);
+        }
+    }
+
+    /**
+     * Attaches the recorder that inspects every measured tick for lag spikes (may be {@code null}).
+     */
+    public void setSpikeRecorder(LagSpikeRecorder spikeRecorder) {
+        this.spikeRecorder = spikeRecorder;
     }
 
     /**
@@ -106,6 +118,11 @@ public final class TickMonitor {
             // If Paper provides actual work MSPT via getAverageTickTime or getTickTimes, prefer actual work duration
             double measuredMspt = readNativeTickDurationMs(intervalMsPerTick);
             metricRegistry.recordTickDurationMs(measuredMspt, nowNanos);
+            // Native averages smooth spikes away; the wall-clock gap between ticks shows a stall directly
+            LagSpikeRecorder recorder = this.spikeRecorder;
+            if (recorder != null) {
+                recorder.onTick(intervalMsPerTick);
+            }
         }
         lastTickNanos = nowNanos;
     }
