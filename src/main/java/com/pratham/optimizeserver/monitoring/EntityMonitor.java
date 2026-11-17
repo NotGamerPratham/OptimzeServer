@@ -39,9 +39,10 @@ public final class EntityMonitor {
     private final Method worldEntityCountMethod;
     private final Method chunkTileEntitiesNoSnapshotMethod;
 
-    // Resolved lazily against the live World implementation (Paper's CraftWorld exposes it; Spigot does not)
-    private volatile Class<?> tileCountWorldClass;
-    private volatile Method worldTileEntityCountMethod;
+    // Resolved lazily against the live World implementation (Paper's CraftWorld exposes these; Spigot does not)
+    private final WorldIntAccessor tileCountAccessor = new WorldIntAccessor("getTileEntityCount");
+    private final WorldIntAccessor tickableTileCountAccessor = new WorldIntAccessor("getTickableTileEntityCount");
+    private final WorldIntAccessor playerCountAccessor = new WorldIntAccessor("getPlayerCount");
 
     private final AtomicInteger eventTrackedTotalEntities = new AtomicInteger(0);
     // Indexed by EntityType ordinal: the spawn listener fires for every item, orb, and projectile, so no hashing
@@ -59,9 +60,15 @@ public final class EntityMonitor {
     private int scanWorldCursor = 0;
     private int scanChunkCursor = 0;
     private int incrementalTileAccum = 0;
+    private int incrementalWorldTileAccum = 0;
+    private Map<String, Integer> incrementalTilesByWorld = new HashMap<String, Integer>();
 
     private volatile int totalEntities = 0;
     private volatile int tileEntityCount = 0;
+    private volatile int tickableTileEntityCount = -1;
+    private volatile Map<String, Integer> tilesByWorld = Collections.emptyMap();
+    private volatile Map<String, Integer> tickableTilesByWorld = Collections.emptyMap();
+    private volatile Map<String, Integer> playersByWorld = Collections.emptyMap();
     private volatile Map<String, Integer> entitiesByType = Collections.emptyMap();
     private volatile Map<String, Integer> entitiesByWorld = Collections.emptyMap();
 
@@ -154,6 +161,7 @@ public final class EntityMonitor {
                     ? null
                     : new HashMap<String, Integer>();
             Map<String, Integer> byWorld = new HashMap<String, Integer>();
+            Map<String, Integer> players = new HashMap<String, Integer>();
 
             try {
                 List<World> worlds = server.getWorlds();
@@ -162,6 +170,7 @@ public final class EntityMonitor {
                         if (world == null) {
                             continue;
                         }
+                        players.put(world.getName(), Integer.valueOf(readPlayerCount(world)));
                         if (zeroAllocScanEnabled && worldEntityCountMethod != null) {
                             int worldCount = readWorldEntityCountFast(world);
                             if (worldCount >= 0) {
@@ -196,6 +205,7 @@ public final class EntityMonitor {
                 }
                 this.totalEntities = total;
                 this.entitiesByWorld = FrozenCounts.adopt(byWorld);
+                this.playersByWorld = FrozenCounts.adopt(players);
                 if (byType != null) {
                     this.entitiesByType = FrozenCounts.adopt(byType);
                 } else {
@@ -226,41 +236,39 @@ public final class EntityMonitor {
             this.tileEntityCount = 0;
             return;
         }
-        if (zeroAllocScanEnabled) {
-            int fastTotal = readTileEntityCountFast(worlds);
-            if (fastTotal >= 0) {
-                // Paper sums its block-entity maps directly: no Chunk[] copy and no BlockState wrappers
-                this.tileEntityCount = fastTotal;
-                this.scanWorldCursor = 0;
-                this.scanChunkCursor = 0;
-                this.incrementalTileAccum = 0;
-                return;
-            }
+        if (zeroAllocScanEnabled && readTileEntityCountsFast(worlds)) {
+            // Paper sums its block-entity maps directly: no Chunk[] copy and no BlockState wrappers
+            resetIncrementalScan();
+            return;
         }
+        // Without Paper's counters there is no way to tell ticking block entities apart cheaply
+        this.tickableTileEntityCount = -1;
+        this.tickableTilesByWorld = Collections.emptyMap();
         if (!zeroAllocScanEnabled) {
             int fullTiles = 0;
+            Map<String, Integer> perWorld = new HashMap<String, Integer>();
             for (World world : worlds) {
                 if (world == null) continue;
+                int worldTiles = 0;
                 Chunk[] loaded = world.getLoadedChunks();
                 if (loaded != null) {
                     for (Chunk chunk : loaded) {
-                        fullTiles += countChunkTileEntities(chunk);
+                        worldTiles += countChunkTileEntities(chunk);
                     }
                 }
+                perWorld.put(world.getName(), Integer.valueOf(worldTiles));
+                fullTiles += worldTiles;
             }
             this.tileEntityCount = fullTiles;
-            this.scanWorldCursor = 0;
-            this.scanChunkCursor = 0;
-            this.incrementalTileAccum = 0;
+            this.tilesByWorld = FrozenCounts.adopt(perWorld);
+            resetIncrementalScan();
             return;
         }
 
         // Incremental time-budgeted traversal avoids blocking one tick across thousands of chunks
         long deadlineNanos = startNanos + tileScanBudgetNanos;
         if (scanWorldCursor >= worlds.size()) {
-            scanWorldCursor = 0;
-            scanChunkCursor = 0;
-            incrementalTileAccum = 0;
+            resetIncrementalScan();
         }
 
         while (scanWorldCursor < worlds.size()) {
@@ -269,7 +277,9 @@ public final class EntityMonitor {
                 Chunk[] loaded = world.getLoadedChunks();
                 if (loaded != null) {
                     while (scanChunkCursor < loaded.length) {
-                        incrementalTileAccum += countChunkTileEntities(loaded[scanChunkCursor]);
+                        int n = countChunkTileEntities(loaded[scanChunkCursor]);
+                        incrementalTileAccum += n;
+                        incrementalWorldTileAccum += n;
                         scanChunkCursor++;
                         if ((scanChunkCursor & 7) == 0 && System.nanoTime() >= deadlineNanos) {
                             budgetYieldCount.incrementAndGet();
@@ -277,59 +287,112 @@ public final class EntityMonitor {
                         }
                     }
                 }
+                incrementalTilesByWorld.put(world.getName(), Integer.valueOf(incrementalWorldTileAccum));
             }
+            incrementalWorldTileAccum = 0;
             scanWorldCursor++;
             scanChunkCursor = 0;
         }
 
         this.tileEntityCount = incrementalTileAccum;
+        this.tilesByWorld = FrozenCounts.adopt(incrementalTilesByWorld);
+        this.incrementalTilesByWorld = new HashMap<String, Integer>();
+        resetIncrementalScan();
+    }
+
+    private void resetIncrementalScan() {
         this.scanWorldCursor = 0;
         this.scanChunkCursor = 0;
         this.incrementalTileAccum = 0;
+        this.incrementalWorldTileAccum = 0;
+        this.incrementalTilesByWorld.clear();
     }
 
     /**
-     * Sums {@code World#getTileEntityCount()} across worlds, or returns -1 when the live World
-     * implementation does not expose it (Spigot/CraftBukkit) so the caller falls back to chunk scanning.
+     * Reads {@code World#getTileEntityCount()} (and, when present, {@code getTickableTileEntityCount()})
+     * for every world. Returns false when the live World implementation lacks them (Spigot/CraftBukkit),
+     * so the caller falls back to chunk scanning.
      */
-    private int readTileEntityCountFast(List<World> worlds) {
+    private boolean readTileEntityCountsFast(List<World> worlds) {
         int total = 0;
+        int tickableTotal = 0;
+        boolean tickableAvailable = true;
+        Map<String, Integer> perWorld = new HashMap<String, Integer>();
+        Map<String, Integer> tickablePerWorld = new HashMap<String, Integer>();
         for (World world : worlds) {
             if (world == null) {
                 continue;
             }
-            Method method = resolveTileEntityCountMethod(world.getClass());
-            if (method == null) {
-                return -1;
+            int tiles = tileCountAccessor.read(world);
+            if (tiles < 0) {
+                return false;
             }
-            try {
-                Object raw = method.invoke(world);
-                if (!(raw instanceof Number)) {
-                    return -1;
+            total += tiles;
+            perWorld.put(world.getName(), Integer.valueOf(tiles));
+            if (tickableAvailable) {
+                int tickable = tickableTileCountAccessor.read(world);
+                if (tickable < 0) {
+                    tickableAvailable = false;
+                } else {
+                    tickableTotal += tickable;
+                    tickablePerWorld.put(world.getName(), Integer.valueOf(tickable));
                 }
-                total += Math.max(0, ((Number) raw).intValue());
-            } catch (Throwable ignored) {
-                // Never retry a broken accessor every sample; chunk scanning remains available
-                this.worldTileEntityCountMethod = null;
-                this.tileCountWorldClass = world.getClass();
-                return -1;
             }
         }
         fastTileCountReads.incrementAndGet();
-        return total;
+        this.tileEntityCount = total;
+        this.tilesByWorld = FrozenCounts.adopt(perWorld);
+        this.tickableTileEntityCount = tickableAvailable ? tickableTotal : -1;
+        this.tickableTilesByWorld = tickableAvailable ? FrozenCounts.adopt(tickablePerWorld) : Collections.<String, Integer>emptyMap();
+        return true;
     }
 
-    private Method resolveTileEntityCountMethod(Class<?> worldClass) {
-        if (worldClass == tileCountWorldClass) {
-            return worldTileEntityCountMethod;
+    private int readPlayerCount(World world) {
+        int fast = playerCountAccessor.read(world);
+        if (fast >= 0) {
+            return fast;
         }
-        Method resolved = findOptionalMethod(worldClass, "getTileEntityCount");
-        if (resolved != null && resolved.getReturnType() != int.class) {
-            resolved = null;
+        List<?> players = world.getPlayers();
+        return players != null ? players.size() : 0;
+    }
+
+    /**
+     * Lazily resolved, failure-latching reflective {@code int} accessor on the live World class.
+     * Returns -1 when the method is absent or has failed once (it is never retried every sample).
+     */
+    private static final class WorldIntAccessor {
+        private final String methodName;
+        private volatile Class<?> resolvedFor;
+        private volatile Method method;
+
+        WorldIntAccessor(String methodName) {
+            this.methodName = methodName;
         }
-        this.worldTileEntityCountMethod = resolved;
-        this.tileCountWorldClass = worldClass;
-        return resolved;
+
+        int read(World world) {
+            Class<?> cls = world.getClass();
+            Method m;
+            if (cls == resolvedFor) {
+                m = method;
+            } else {
+                m = findOptionalMethod(cls, methodName);
+                if (m != null && m.getReturnType() != int.class) {
+                    m = null;
+                }
+                this.method = m;
+                this.resolvedFor = cls;
+            }
+            if (m == null) {
+                return -1;
+            }
+            try {
+                Object raw = m.invoke(world);
+                return raw instanceof Number ? Math.max(0, ((Number) raw).intValue()) : -1;
+            } catch (Throwable ignored) {
+                this.method = null;
+                return -1;
+            }
+        }
     }
 
     private int countChunkTileEntities(Chunk chunk) {
@@ -371,6 +434,26 @@ public final class EntityMonitor {
 
     public int getTotalEntities() {
         return totalEntities;
+    }
+
+    /**
+     * Block entities that tick every server tick (hoppers, furnaces, spawners, ...), or -1 when the
+     * server does not expose Paper's {@code World#getTickableTileEntityCount()}.
+     */
+    public int getTickableTileEntityCount() {
+        return tickableTileEntityCount;
+    }
+
+    public Map<String, Integer> getTilesByWorld() {
+        return tilesByWorld;
+    }
+
+    public Map<String, Integer> getTickableTilesByWorld() {
+        return tickableTilesByWorld;
+    }
+
+    public Map<String, Integer> getPlayersByWorld() {
+        return playersByWorld;
     }
 
     public int getTileEntityCount() {

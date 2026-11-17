@@ -35,7 +35,8 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
 
     private static final List<String> ROOT_SUBCOMMANDS = Arrays.asList(
             "help", "version", "status", "tps", "mspt", "cpu", "memory", "network",
-            "chunks", "entities", "diagnose", "profile", "health", "optimize", "tune", "capacity", "report", "reload"
+            "chunks", "entities", "worlds", "spikes", "diagnose", "profile", "health", "optimize", "tune", "capacity",
+            "report", "reload"
     );
 
     private static final List<String> DIAGNOSE_SUBCOMMANDS = Arrays.asList(
@@ -63,7 +64,7 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
 
     public OptimizeServerCommand(PerformanceEngine engine, String pluginVersion) {
         this.engine = engine;
-        this.pluginVersion = pluginVersion != null ? pluginVersion : "1.3.0";
+        this.pluginVersion = pluginVersion != null ? pluginVersion : "1.4.0";
     }
 
     @Override
@@ -132,6 +133,22 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
         }
         if ("chunks".equals(sub)) {
             handleChunks(sender, args);
+            return true;
+        }
+        if ("worlds".equals(sub)) {
+            if (!requirePermission(sender, CommandPermissions.STATUS)) return true;
+            handleWorlds(sender);
+            return true;
+        }
+        if ("spikes".equals(sub)) {
+            if (!requirePermission(sender, CommandPermissions.STATUS)) return true;
+            if (args.length >= 2 && "clear".equalsIgnoreCase(args[1])) {
+                if (!requirePermission(sender, CommandPermissions.DIAGNOSE)) return true;
+                engine.getLagSpikeRecorder().clear();
+                sender.sendMessage(ChatColor.GREEN + "[OptimizeServer] Lag spike history cleared.");
+                return true;
+            }
+            handleSpikes(sender, args.length >= 2 ? parsePage(args[1], 1) : 1);
             return true;
         }
         if ("diagnose".equals(sub)) {
@@ -203,6 +220,8 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
                 ChatColor.YELLOW + "/os network" + ChatColor.GRAY + " - Display player RTT ping vs server tick/packet overhead",
                 ChatColor.YELLOW + "/os chunks [status|recommend|start|pause|cancel]" + ChatColor.GRAY + " - Chunk metrics & Chunky control",
                 ChatColor.YELLOW + "/os entities" + ChatColor.GRAY + " - Display entity and block-entity distributions",
+                ChatColor.YELLOW + "/os worlds" + ChatColor.GRAY + " - Per-world chunks, entities, block entities, and players",
+                ChatColor.YELLOW + "/os spikes [page|clear]" + ChatColor.GRAY + " - Recent lag spikes with their context and likely cause",
                 ChatColor.YELLOW + "/os diagnose [full|cpu|memory|chunks|entities|plugins]" + ChatColor.GRAY + " - Bottleneck analysis",
                 ChatColor.YELLOW + "/os profile <start|stop|status|memory>" + ChatColor.GRAY + " - Spark profiler control",
                 ChatColor.YELLOW + "/os health" + ChatColor.GRAY + " - Comprehensive server and Spark health overview",
@@ -325,11 +344,102 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
     private void handleEntities(CommandSender sender) {
         MetricSnapshot s = engine.getLatestSnapshot();
         sender.sendMessage(ChatColor.DARK_AQUA + "=== " + ChatColor.AQUA + "Entity & Block-Entity Telemetry" + ChatColor.DARK_AQUA + " ===");
+        String tickable = s.getTickableTileEntityCount() >= 0
+                ? ChatColor.GRAY + " (" + ChatColor.WHITE + s.getTickableTileEntityCount() + ChatColor.GRAY + " ticking)"
+                : "";
         sender.sendMessage(ChatColor.GRAY + "Total Entities: " + ChatColor.WHITE + s.getTotalEntities()
-                + ChatColor.GRAY + " | Tile/Block Entities: " + ChatColor.WHITE + s.getTileEntityCount());
+                + ChatColor.GRAY + " | Tile/Block Entities: " + ChatColor.WHITE + s.getTileEntityCount() + tickable);
         sender.sendMessage(ChatColor.GRAY + "Distribution by World: " + ChatColor.WHITE + s.getEntitiesByWorld());
         sender.sendMessage(ChatColor.GRAY + "Distribution by Type : " + ChatColor.WHITE + s.getEntitiesByType());
         sender.sendMessage(ChatColor.GRAY + "Gameplay Policy: Read-only monitoring; OptimizeServer never removes entities or disables mob AI.");
+    }
+
+    private void handleWorlds(CommandSender sender) {
+        sender.sendMessage(ChatColor.DARK_AQUA + "=== " + ChatColor.AQUA + "Per-World Load Breakdown" + ChatColor.DARK_AQUA + " ===");
+        if (engine.getScheduler() != null && engine.getScheduler().isRegionThreaded()) {
+            sender.sendMessage(ChatColor.GRAY + "Per-world counts are unavailable on Folia: worlds are owned by many region threads, so they are not enumerated globally.");
+            return;
+        }
+        Map<String, Integer> chunks = engine.getChunkMonitor().getChunksByWorld();
+        Map<String, Integer> entities = engine.getEntityMonitor().getEntitiesByWorld();
+        Map<String, Integer> tiles = engine.getEntityMonitor().getTilesByWorld();
+        Map<String, Integer> tickable = engine.getEntityMonitor().getTickableTilesByWorld();
+        Map<String, Integer> players = engine.getEntityMonitor().getPlayersByWorld();
+        java.util.Set<String> names = new java.util.TreeSet<String>();
+        names.addAll(chunks.keySet());
+        names.addAll(entities.keySet());
+        names.addAll(players.keySet());
+        if (names.isEmpty()) {
+            sender.sendMessage(ChatColor.GRAY + "No world sample yet; data refreshes every few seconds.");
+            return;
+        }
+        String heaviest = null;
+        int heaviestChunks = -1;
+        for (String name : names) {
+            int c = valueOf(chunks, name);
+            if (c > heaviestChunks) {
+                heaviestChunks = c;
+                heaviest = name;
+            }
+            String tickableText = tickable.containsKey(name)
+                    ? ChatColor.GRAY + " (" + ChatColor.WHITE + valueOf(tickable, name) + ChatColor.GRAY + " ticking)"
+                    : "";
+            sender.sendMessage(ChatColor.YELLOW + name + ChatColor.GRAY + ": "
+                    + ChatColor.WHITE + c + ChatColor.GRAY + " chunks | "
+                    + ChatColor.WHITE + valueOf(entities, name) + ChatColor.GRAY + " entities | "
+                    + ChatColor.WHITE + valueOf(tiles, name) + ChatColor.GRAY + " block entities" + tickableText + " | "
+                    + ChatColor.WHITE + valueOf(players, name) + ChatColor.GRAY + " players");
+        }
+        if (heaviest != null && names.size() > 1) {
+            sender.sendMessage(ChatColor.GRAY + "Most loaded chunks: " + ChatColor.WHITE + heaviest
+                    + ChatColor.GRAY + ". Read-only view; OptimizeServer never unloads worlds or chunks.");
+        }
+    }
+
+    private static int valueOf(Map<String, Integer> map, String key) {
+        Integer v = map != null ? map.get(key) : null;
+        return v != null ? v.intValue() : 0;
+    }
+
+    private void handleSpikes(CommandSender sender, int page) {
+        com.pratham.optimizeserver.monitoring.LagSpikeRecorder recorder = engine.getLagSpikeRecorder();
+        sender.sendMessage(ChatColor.DARK_AQUA + "=== " + ChatColor.AQUA + "Lag Spikes" + ChatColor.DARK_AQUA + " ===");
+        if (!recorder.isEnabled()) {
+            sender.sendMessage(ChatColor.GRAY + "Lag spike recording is disabled (monitoring.lag-spikes.enabled).");
+            return;
+        }
+        long now = System.currentTimeMillis();
+        sender.sendMessage(String.format(Locale.ROOT,
+                ChatColor.GRAY + "Threshold: " + ChatColor.WHITE + "%.0f ms"
+                        + ChatColor.GRAY + " | Last 10 min: " + ChatColor.WHITE + "%d"
+                        + ChatColor.GRAY + " | Last hour: " + ChatColor.WHITE + "%d"
+                        + ChatColor.GRAY + " | Since start: " + ChatColor.WHITE + "%d"
+                        + ChatColor.GRAY + " | Worst: " + ChatColor.WHITE + "%.0f ms",
+                recorder.getThresholdMs(), recorder.countSince(now - 600_000L), recorder.countSince(now - 3_600_000L),
+                recorder.getTotalSpikes(), recorder.getWorstMs()));
+        List<com.pratham.optimizeserver.monitoring.LagSpikeRecorder.LagSpike> spikes = recorder.getRecentSpikes(Integer.MAX_VALUE);
+        if (spikes.isEmpty()) {
+            sender.sendMessage(ChatColor.GREEN + "No ticks over the threshold have been recorded.");
+            return;
+        }
+        List<String> lines = new ArrayList<String>();
+        for (com.pratham.optimizeserver.monitoring.LagSpikeRecorder.LagSpike spike : spikes) {
+            lines.add(String.format(Locale.ROOT,
+                    ChatColor.YELLOW + "%s ago" + ChatColor.GRAY + ": " + ChatColor.RED + "%.0f ms"
+                            + ChatColor.GRAY + " | %d chunks, %d entities, %d players, heap %.0f%%, GC %d ms"
+                            + ChatColor.GRAY + " -> " + ChatColor.WHITE + "%s",
+                    formatAgo(now - spike.getTimestampMillis()), spike.getDurationMs(), spike.getLoadedChunks(),
+                    spike.getTotalEntities(), spike.getOnlinePlayers(), spike.getHeapUsagePercent(),
+                    spike.getGcMsSinceLastSample(), spike.getLikelyCause()));
+        }
+        CommandPagination.sendPaginated(sender, "Recent Lag Spikes (newest first)", lines, page, 8, "/os spikes");
+    }
+
+    private static String formatAgo(long millis) {
+        long sec = Math.max(0L, millis / 1000L);
+        if (sec < 60L) return sec + "s";
+        if (sec < 3600L) return (sec / 60L) + "m";
+        return (sec / 3600L) + "h" + ((sec % 3600L) / 60L) + "m";
     }
 
     private void handleChunks(CommandSender sender, String[] args) {
@@ -727,6 +837,7 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
             if ("optimize".equals(sub)) return filterPrefix(OPTIMIZE_SUBCOMMANDS, args[1]);
             if ("chunks".equals(sub)) return filterPrefix(CHUNKS_SUBCOMMANDS, args[1]);
             if ("report".equals(sub)) return filterPrefix(REPORT_SUBCOMMANDS, args[1]);
+            if ("spikes".equals(sub)) return filterPrefix(Arrays.asList("1", "2", "clear"), args[1]);
         }
         if (args.length == 3 && "optimize".equalsIgnoreCase(args[0])) {
             String action = args[1].toLowerCase(Locale.ROOT);

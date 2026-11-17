@@ -15,6 +15,7 @@ import com.pratham.optimizeserver.metrics.RollingWindow;
 import com.pratham.optimizeserver.monitoring.ChunkMonitor;
 import com.pratham.optimizeserver.monitoring.CpuMonitor;
 import com.pratham.optimizeserver.monitoring.EntityMonitor;
+import com.pratham.optimizeserver.monitoring.LagSpikeRecorder;
 import com.pratham.optimizeserver.monitoring.MemoryMonitor;
 import com.pratham.optimizeserver.monitoring.NetworkMonitor;
 import com.pratham.optimizeserver.monitoring.PaperTickEventHook;
@@ -63,6 +64,8 @@ public final class PerformanceEngine implements EngineLifecycle {
     private MetricRegistry metricRegistry;
 
     private TickMonitor tickMonitor;
+    private LagSpikeRecorder lagSpikeRecorder;
+    private final AtomicLong lastSpikeAlertMillis = new AtomicLong(0L);
     private CpuMonitor cpuMonitor;
     private MemoryMonitor memoryMonitor;
     private NetworkMonitor networkMonitor;
@@ -156,6 +159,15 @@ public final class PerformanceEngine implements EngineLifecycle {
         this.metricRegistry = new MetricRegistry(maxSnapshots, bufferPoolCap);
 
         this.tickMonitor = new TickMonitor(server, compatReport.getCapabilities(), metricRegistry);
+        this.lagSpikeRecorder = new LagSpikeRecorder(metricRegistry.getHistory(), 50);
+        configureSpikeRecorder();
+        this.lagSpikeRecorder.setListener(new LagSpikeRecorder.SpikeListener() {
+            @Override
+            public void onSpike(final LagSpikeRecorder.LagSpike spike) {
+                announceSpike(spike);
+            }
+        });
+        this.tickMonitor.setSpikeRecorder(lagSpikeRecorder);
         this.cpuMonitor = new CpuMonitor();
         this.memoryMonitor = new MemoryMonitor();
         this.networkMonitor = new NetworkMonitor(server, compatReport.getCapabilities());
@@ -379,7 +391,7 @@ public final class PerformanceEngine implements EngineLifecycle {
             } catch (Throwable ignored) {
             }
         }
-        return "1.3.0";
+        return "1.4.0";
     }
 
     /**
@@ -441,6 +453,7 @@ public final class PerformanceEngine implements EngineLifecycle {
                 .chunkGenRatePerSec(chunkMonitor.getChunkGenRatePerSec())
                 .totalEntities(entityMonitor.getTotalEntities())
                 .tileEntityCount(entityMonitor.getTileEntityCount())
+                .tickableTileEntityCount(entityMonitor.getTickableTileEntityCount())
                 .entitiesByType(entityMonitor.getEntitiesByType())
                 .entitiesByWorld(entityMonitor.getEntitiesByWorld())
                 .pendingServerTasks(taskMonitor.getPendingServerTasks())
@@ -450,6 +463,47 @@ public final class PerformanceEngine implements EngineLifecycle {
                 .storageIoLatencyMs(storageMonitor.getStorageIoLatencyMs())
                 .build();
     }
+
+    private void configureSpikeRecorder() {
+        if (lagSpikeRecorder == null) {
+            return;
+        }
+        boolean enabled = configManager == null || configManager.getBoolean("monitoring.lag-spikes.enabled", true);
+        double threshold = configManager != null ? configManager.getDouble("monitoring.lag-spikes.threshold-ms", 100.0) : 100.0;
+        int historySize = configManager != null ? configManager.getInt("monitoring.lag-spikes.history-size", 50) : 50;
+        lagSpikeRecorder.configure(enabled, threshold, historySize);
+    }
+
+    /**
+     * Logs a cooldown-limited console line for a lag spike. Runs the logging off the tick thread.
+     */
+    private void announceSpike(final LagSpikeRecorder.LagSpike spike) {
+        if (configManager != null && !configManager.getBoolean("monitoring.lag-spikes.console-alert", true)) {
+            return;
+        }
+        long cooldownMs = Math.max(5L, configManager != null
+                ? configManager.getLong("monitoring.lag-spikes.alert-cooldown-seconds", 30L) : 30L) * 1000L;
+        long now = spike.getTimestampMillis();
+        long last = lastSpikeAlertMillis.get();
+        if ((now - last) < cooldownMs || !lastSpikeAlertMillis.compareAndSet(last, now)) {
+            return;
+        }
+        final String line = String.format(java.util.Locale.ROOT,
+                "[OptimizeServer] Lag spike: %.0f ms tick (%d chunks, %d entities, %d players, GC %d ms). Likely cause: %s. See /os spikes",
+                spike.getDurationMs(), spike.getLoadedChunks(), spike.getTotalEntities(), spike.getOnlinePlayers(),
+                spike.getGcMsSinceLastSample(), spike.getLikelyCause());
+        Runnable log = new Runnable() {
+            @Override
+            public void run() {
+                logger.warning(line);
+            }
+        };
+        if (scheduler == null || !scheduler.runAsync(log)) {
+            log.run();
+        }
+    }
+
+    public LagSpikeRecorder getLagSpikeRecorder() { return lagSpikeRecorder; }
 
     @Override
     public synchronized void reload() {
@@ -471,6 +525,7 @@ public final class PerformanceEngine implements EngineLifecycle {
         if (alertManager != null) {
             alertManager.clearCooldowns();
         }
+        configureSpikeRecorder();
         if (reportGenerator != null) {
             final String logMsg = "Reloaded OptimizeServer configuration and re-validated modules.";
             if (shouldOffloadAsyncIo()) {

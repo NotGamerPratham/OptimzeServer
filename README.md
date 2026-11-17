@@ -86,6 +86,8 @@ All three platforms ship the identical universal `OptimizeServer.jar` (Java 8+ b
 | `/os memory` | `optimizeserver.status` | Heap, non-heap, GC pause rate, and allocation telemetry |
 | `/os network` | `optimizeserver.status` | Player RTT ping vs server tick/packet processing overhead |
 | `/os entities` | `optimizeserver.status` | Read-only entity and tile-entity counts by type and world |
+| `/os worlds` | `optimizeserver.status` | Per-world loaded chunks, entities, block entities (ticking on Paper), and players |
+| `/os spikes [page\|clear]` | `optimizeserver.status` | Recent ticks over the lag-spike threshold, with chunk/entity/player/heap/GC context and likely cause (`clear` needs `optimizeserver.diagnose`) |
 | `/os chunks [status\|recommend\|start\|pause\|cancel]` | `optimizeserver.chunks` | Chunk telemetry and manual Chunky pre-generation controls |
 | `/os diagnose [full\|cpu\|memory\|chunks\|entities\|plugins]` | `optimizeserver.diagnose` | Evidence-backed bottleneck classification & recommendations |
 | `/os profile <start\|stop\|status\|memory>` | `optimizeserver.profile` | Spark profiler session control and memory diagnostics |
@@ -126,7 +128,7 @@ mvn clean test package -Pmodern-java21
 
 `pom.xml` is pre-configured with `<artifactId>optimizeserver</artifactId>` (lowercase as required by GitHub Packages) and `<distributionManagement>` pointing to `https://maven.pkg.github.com/notgamerpratham/optimzeserver`.
 
-- **Automated Publishing (GitHub Actions):** Pushing to `main` or creating a release runs [`.github/workflows/maven-publish.yml`](.github/workflows/maven-publish.yml), which executes all JUnit tests, uploads `OptimizeServer.jar`, and publishes `com.pratham:optimizeserver:1.3.0` to GitHub Packages using `GITHUB_TOKEN`.
+- **Automated Publishing (GitHub Actions):** Pushing to `main` or creating a release runs [`.github/workflows/maven-publish.yml`](.github/workflows/maven-publish.yml), which executes all JUnit tests, uploads `OptimizeServer.jar`, and publishes `com.pratham:optimizeserver:1.4.0` to GitHub Packages using `GITHUB_TOKEN`.
 - **Local Publishing (`mvn deploy`):** Configure `~/.m2/settings.xml` with server `<id>github</id>`, your GitHub username, and a classic Personal Access Token (`write:packages`, `read:packages`), then run:
 
   ```bash
@@ -139,7 +141,7 @@ mvn clean test package -Pmodern-java21
   <dependency>
       <groupId>com.pratham</groupId>
       <artifactId>optimizeserver</artifactId>
-      <version>1.3.0</version>
+      <version>1.4.0</version>
       <scope>provided</scope>
   </dependency>
   ```
@@ -150,13 +152,13 @@ mvn clean test package -Pmodern-java21
 2. Tag and push:
 
    ```bash
-   git tag v1.3.0
-   git push origin v1.3.0
+   git tag v1.4.0
+   git push origin v1.4.0
    ```
 
 3. [`.github/workflows/release.yml`](.github/workflows/release.yml) then builds and tests the JAR and:
    - **GitHub Releases:** creates the release with `OptimizeServer.jar`, checksums, and the CHANGELOG notes.
-   - **Modrinth:** uploads a new version (loaders: Bukkit, Spigot, Paper, Purpur, Folia; every Minecraft release from 1.8.8 onward). This step needs the repository secret `MODRINTH_TOKEN` (a Modrinth PAT with the *Create versions* scope) and the repository variable `MODRINTH_PROJECT_ID`. If either one is missing, the step is skipped.
+   - **Modrinth:** uploads a new version (loaders: Bukkit, Spigot, Paper, Purpur, Folia; every Minecraft release from 1.8.8 onward). This step needs the repository secret `MODRINTH_TOKEN` (a Modrinth PAT with the *Create versions* scope); without it the step is skipped. The project defaults to the `optimizeserver-notgamerpratham` slug, which the workflow resolves to its ID; set the repository variable `MODRINTH_PROJECT_ID` only to target a different project.
    - **SpigotMC:** SpigotMC has no upload API, so use *Post Update* on the resource page and upload the JAR from the GitHub Release. You can paste the page description from [`docs/publishing/spigot-description.bbcode`](docs/publishing/spigot-description.bbcode).
 
 ---

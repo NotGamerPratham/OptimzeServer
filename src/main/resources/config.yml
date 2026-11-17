@@ -44,6 +44,14 @@ monitoring:
     world-sample-interval-ticks: 100
     # Storage/Task inspection interval in milliseconds (async)
     background-sample-interval-ms: 5000
+  # Records individual slow ticks with their context; view with /os spikes
+  lag-spikes:
+    enabled: true
+    # Ticks at or above this many milliseconds are recorded (minimum 55)
+    threshold-ms: 100.0
+    history-size: 50
+    console-alert: true
+    alert-cooldown-seconds: 30
   retention:
     max-snapshots: 900
     rolling-windows-seconds:
