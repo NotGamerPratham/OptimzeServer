@@ -2,6 +2,13 @@
 
 All notable changes to **OptimizeServer** will be documented in this file.
 
+## [1.7.0] - 2026-11-20
+
+### Added
+- **`/os ticks [minutes]`:** how server ticks are distributed by duration (<= 25 ms, 25-50, 50-100, 100-250, > 250 ms) over the last 1-15 minutes, with the share of ticks over 50 ms. Averages hide stutter; this shows it. Uses the existing tick ring, so it adds no per-tick cost.
+- **`/os gc`:** per-collector collection counts, total and average pause time, the current GC pause and allocation rates, and a **memory-leak watch** that fits a trend through the heap left after each garbage collection. A floor that keeps climbing is reported with its growth in MB/hour and an estimate of when the heap would fill; it needs several GC cycles over at least 4 minutes and is an estimate, not proof.
+- **`/os export [minutes]`:** writes recent metrics (TPS, MSPT, CPU, heap, GC, players, chunks, entities, block entities, tasks) to a CSV under `plugins/OptimizeServer/exports/` for charts and spreadsheets. Written off the server thread; the newest 20 exports are kept. Needs `optimizeserver.report`.
+
 ## [1.6.1] - 2026-11-20
 
 ### Added

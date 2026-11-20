@@ -150,6 +150,32 @@ public final class TickDurationRing {
     }
 
     /**
+     * Counts the ticks within the window by duration. {@code upperBoundsMs} must be ascending; the result has one
+     * more entry than the bounds (the last counts ticks above the final bound). A tick equal to a bound falls in
+     * that bound's bucket.
+     */
+    public int[] countBuckets(long windowNanos, long nowNanos, double[] upperBoundsMs) {
+        int[] counts = new int[upperBoundsMs.length + 1];
+        synchronized (this) {
+            long first = firstSeqWithin(nowNanos - windowNanos);
+            if (first < 0L) {
+                return counts;
+            }
+            for (long seq = first; seq < writeCount; seq++) {
+                long start = prefixBeforeNanos[(int) (seq % capacity)];
+                long end = seq + 1L < writeCount ? prefixBeforeNanos[(int) ((seq + 1L) % capacity)] : totalNanos;
+                double ms = (end - start) / 1_000_000.0;
+                int bucket = 0;
+                while (bucket < upperBoundsMs.length && ms > upperBoundsMs[bucket]) {
+                    bucket++;
+                }
+                counts[bucket]++;
+            }
+        }
+        return counts;
+    }
+
+    /**
      * Returns the sequence number of the oldest retained sample with timestamp >= cutoff, or -1.
      * Caller must hold the instance lock.
      */

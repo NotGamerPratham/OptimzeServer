@@ -36,7 +36,7 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
 
     private static final List<String> ROOT_SUBCOMMANDS = Arrays.asList(
             "help", "version", "status", "tps", "mspt", "cpu", "memory", "network",
-            "chunks", "entities", "worlds", "spikes", "plugins", "history", "webhook", "diagnose", "profile", "health", "optimize", "tune", "capacity",
+            "chunks", "entities", "worlds", "spikes", "plugins", "history", "ticks", "gc", "export", "webhook", "diagnose", "profile", "health", "optimize", "tune", "capacity",
             "report", "reload"
     );
 
@@ -68,7 +68,7 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
 
     public OptimizeServerCommand(PerformanceEngine engine, String pluginVersion) {
         this.engine = engine;
-        this.pluginVersion = pluginVersion != null ? pluginVersion : "1.6.1";
+        this.pluginVersion = pluginVersion != null ? pluginVersion : "1.7.0";
     }
 
     @Override
@@ -137,6 +137,21 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
         }
         if ("chunks".equals(sub)) {
             handleChunks(sender, args);
+            return true;
+        }
+        if ("ticks".equals(sub)) {
+            if (!requirePermission(sender, CommandPermissions.STATUS)) return true;
+            handleTicks(sender, args.length >= 2 ? parsePage(args[1], 1) : 1);
+            return true;
+        }
+        if ("gc".equals(sub)) {
+            if (!requirePermission(sender, CommandPermissions.STATUS)) return true;
+            handleGc(sender);
+            return true;
+        }
+        if ("export".equals(sub)) {
+            if (!requirePermission(sender, CommandPermissions.REPORT)) return true;
+            handleExport(sender, args.length >= 2 ? parsePage(args[1], 15) : 15);
             return true;
         }
         if ("plugins".equals(sub)) {
@@ -242,6 +257,9 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
                 ChatColor.YELLOW + "/os worlds" + ChatColor.GRAY + " - Per-world chunks, entities, block entities, and players",
                 ChatColor.YELLOW + "/os history [minutes]" + ChatColor.GRAY + " - Sparkline charts of TPS, MSPT, heap, and players",
                 ChatColor.YELLOW + "/os plugins" + ChatColor.GRAY + " - Plugins ranked by scheduled tasks and async workers",
+                ChatColor.YELLOW + "/os ticks [minutes]" + ChatColor.GRAY + " - Tick-time distribution and share of ticks over 50 ms",
+                ChatColor.YELLOW + "/os gc" + ChatColor.GRAY + " - Garbage-collector totals and a memory-leak trend estimate",
+                ChatColor.YELLOW + "/os export [minutes]" + ChatColor.GRAY + " - Save recent metrics as a CSV file for charts",
                 ChatColor.YELLOW + "/os webhook test" + ChatColor.GRAY + " - Send a test message to the configured alert webhook",
                 ChatColor.YELLOW + "/os spikes [page|clear]" + ChatColor.GRAY + " - Recent lag spikes with their context and likely cause",
                 ChatColor.YELLOW + "/os diagnose [full|cpu|memory|chunks|entities|plugins]" + ChatColor.GRAY + " - Bottleneck analysis",
@@ -380,6 +398,105 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
         sender.sendMessage(ChatColor.GRAY + "Distribution by World: " + ChatColor.WHITE + s.getEntitiesByWorld());
         sender.sendMessage(ChatColor.GRAY + "Distribution by Type : " + ChatColor.WHITE + s.getEntitiesByType());
         sender.sendMessage(ChatColor.GRAY + "Gameplay Policy: Read-only monitoring; OptimizeServer never removes entities or disables mob AI.");
+    }
+
+    private static final double[] TICK_BOUNDS_MS = {25.0, 50.0, 100.0, 250.0};
+    private static final String[] TICK_LABELS = {"<= 25 ms ", "25-50 ms ", "50-100 ms", "100-250 ms", "> 250 ms "};
+
+    private void handleTicks(CommandSender sender, int minutes) {
+        int safeMinutes = Math.max(1, Math.min(15, minutes));
+        long windowNanos = safeMinutes * 60L * 1_000_000_000L;
+        int[] counts = engine.getMetricRegistry().getTickRing().countBuckets(windowNanos, System.nanoTime(), TICK_BOUNDS_MS);
+        long total = 0L;
+        for (int c : counts) {
+            total += c;
+        }
+        sender.sendMessage(ChatColor.DARK_AQUA + "=== " + ChatColor.AQUA + "Tick-Time Distribution (last " + safeMinutes + " min)" + ChatColor.DARK_AQUA + " ===");
+        if (total == 0L) {
+            sender.sendMessage(ChatColor.GRAY + "No ticks recorded yet.");
+            return;
+        }
+        for (int i = 0; i < counts.length; i++) {
+            double pct = counts[i] * 100.0 / total;
+            int bar = (int) Math.round(pct / 5.0);
+            StringBuilder sb = new StringBuilder();
+            for (int b = 0; b < 20; b++) {
+                sb.append(b < bar ? '\u2588' : '\u2591');
+            }
+            ChatColor color = i <= 1 ? ChatColor.GREEN : (i == 2 ? ChatColor.YELLOW : ChatColor.RED);
+            sender.sendMessage(ChatColor.GRAY + TICK_LABELS[i] + " " + color + sb + ChatColor.WHITE
+                    + String.format(Locale.ROOT, " %5.1f%%", pct) + ChatColor.GRAY + " (" + counts[i] + ")");
+        }
+        long over50 = counts[2] + counts[3] + counts[4];
+        sender.sendMessage(String.format(Locale.ROOT,
+                ChatColor.GRAY + "Ticks over 50 ms: " + ChatColor.WHITE + "%.1f%%" + ChatColor.GRAY + " of %d.",
+                over50 * 100.0 / total, total));
+        sender.sendMessage(ChatColor.GRAY + (engine.isUsingPaperTickEvents()
+                ? "Source: exact per-tick durations from the server."
+                : "Source: measured tick intervals (this server does not report exact per-tick durations)."));
+    }
+
+    private void handleGc(CommandSender sender) {
+        sender.sendMessage(ChatColor.DARK_AQUA + "=== " + ChatColor.AQUA + "Garbage Collection" + ChatColor.DARK_AQUA + " ===");
+        for (com.pratham.optimizeserver.monitoring.LeakWatch.CollectorStat c : com.pratham.optimizeserver.monitoring.LeakWatch.collectors()) {
+            sender.sendMessage(String.format(Locale.ROOT,
+                    ChatColor.YELLOW + "%s" + ChatColor.GRAY + ": " + ChatColor.WHITE + "%d" + ChatColor.GRAY + " collections, "
+                            + ChatColor.WHITE + "%d ms" + ChatColor.GRAY + " total, " + ChatColor.WHITE + "%.1f ms" + ChatColor.GRAY + " average",
+                    c.getName(), c.getCount(), c.getTimeMs(), c.getAverageMs()));
+        }
+        MetricSnapshot s = engine.getLatestSnapshot();
+        sender.sendMessage(String.format(Locale.ROOT,
+                ChatColor.GRAY + "Current GC pause rate: " + ChatColor.WHITE + "%.1f ms/s" + ChatColor.GRAY
+                        + " | Allocation rate: " + ChatColor.WHITE + "%d MB/s",
+                s.getRecentGcPauseRateMsPerSec(), s.getRecentAllocatedBytesPerSec() / (1024L * 1024L)));
+
+        com.pratham.optimizeserver.monitoring.LeakWatch.Trend trend = com.pratham.optimizeserver.monitoring.LeakWatch.analyze(
+                engine.getMetricRegistry().getHistory().getRecent(Integer.MAX_VALUE));
+        switch (trend.getVerdict()) {
+            case INSUFFICIENT_DATA:
+                sender.sendMessage(ChatColor.GRAY + "Memory leak watch: not enough garbage-collection cycles yet ("
+                        + trend.getPoints() + " readings); needs several cycles over at least 4 minutes.");
+                break;
+            case STABLE:
+                sender.sendMessage(String.format(Locale.ROOT,
+                        ChatColor.GREEN + "Memory leak watch: stable" + ChatColor.GRAY
+                                + " - heap left after GC is %.0f MB (%+.0f MB/h over %d min).",
+                        trend.getLatestMb(), trend.getSlopeMbPerHour(), trend.getSpanMillis() / 60_000L));
+                break;
+            default:
+                String eta = trend.getHoursToFull() >= 0.0
+                        ? String.format(Locale.ROOT, " At this rate the heap would fill in about %.1f h.", trend.getHoursToFull())
+                        : "";
+                sender.sendMessage(String.format(Locale.ROOT,
+                        ChatColor.RED + "Memory leak watch: heap left after GC is rising " + ChatColor.WHITE + "%+.0f MB/h" + ChatColor.RED
+                                + " (now %.0f MB over %d min).%s" + ChatColor.GRAY + " A trend, not proof: see /os profile memory.",
+                        trend.getSlopeMbPerHour(), trend.getLatestMb(), trend.getSpanMillis() / 60_000L, eta));
+        }
+    }
+
+    private void handleExport(final CommandSender sender, int minutes) {
+        final int safeMinutes = Math.max(1, Math.min(15, minutes));
+        final List<MetricSnapshot> rows = engine.getMetricRegistry().getHistory().getRecent(safeMinutes * 60);
+        if (rows.isEmpty()) {
+            sender.sendMessage(ChatColor.YELLOW + "[OptimizeServer] No metric history to export yet.");
+            return;
+        }
+        sender.sendMessage(ChatColor.GRAY + "[OptimizeServer] Exporting " + rows.size() + " samples...");
+        runIo(new Runnable() {
+            @Override
+            public void run() {
+                List<String> out = new ArrayList<String>();
+                try {
+                    File exportsDir = new File(engine.getDataFolder(), "exports");
+                    File written = com.pratham.optimizeserver.reporting.MetricExporter.write(exportsDir, rows);
+                    out.add(ChatColor.GREEN + "[OptimizeServer] Saved " + rows.size() + " samples (last " + safeMinutes + " min) to "
+                            + ChatColor.YELLOW + written.getPath());
+                } catch (IOException ex) {
+                    out.add(ChatColor.RED + "[OptimizeServer] Export failed: " + ex.getMessage());
+                }
+                deliver(sender, out);
+            }
+        });
     }
 
     private void handlePlugins(CommandSender sender) {
@@ -1121,6 +1238,8 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
             if ("tune".equals(sub)) return filterPrefix(Arrays.asList("apply", "restore", "1", "2"), args[1]);
             if ("spikes".equals(sub)) return filterPrefix(Arrays.asList("1", "2", "clear"), args[1]);
             if ("history".equals(sub)) return filterPrefix(Arrays.asList("1", "5", "15"), args[1]);
+            if ("ticks".equals(sub)) return filterPrefix(Arrays.asList("1", "5", "15"), args[1]);
+            if ("export".equals(sub)) return filterPrefix(Arrays.asList("5", "15"), args[1]);
             if ("webhook".equals(sub)) return filterPrefix(Collections.singletonList("test"), args[1]);
         }
         if (args.length == 3 && "tune".equalsIgnoreCase(args[0]) && "apply".equalsIgnoreCase(args[1])) {

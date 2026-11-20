@@ -415,7 +415,7 @@ public final class PerformanceEngine implements EngineLifecycle {
             } catch (Throwable ignored) {
             }
         }
-        return "1.6.1";
+        return "1.7.0";
     }
 
     /**
@@ -753,6 +753,10 @@ public final class PerformanceEngine implements EngineLifecycle {
 
     public File writeTunePresets(ServerConfigAuditor.AuditReport report) throws IOException {
         return serverConfigAuditor.writePresets(dataFolder, report);
+    }
+
+    public File getDataFolder() {
+        return dataFolder;
     }
 
     public File getTuneBackupsFolder() {
