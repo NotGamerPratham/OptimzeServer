@@ -10,6 +10,12 @@
 [![Java CI](https://github.com/NotGamerPratham/OptimzeServer/actions/workflows/maven.yml/badge.svg)](https://github.com/NotGamerPratham/OptimzeServer/actions/workflows/maven.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+<p align="center">
+  <a href="https://ngpcloud.in" title="NGP Cloud - game server hosting">
+    <img src="docs/images/sponsor-ngp-cloud.svg" alt="Sponsored by NGP Cloud - game server hosting" width="100%">
+  </a>
+</p>
+
 **Author:** NotGamerPratham  
 **Main Package:** `com.pratham.optimizeserver`  
 **Main Class:** `com.pratham.optimizeserver.OptimizeServer`  
