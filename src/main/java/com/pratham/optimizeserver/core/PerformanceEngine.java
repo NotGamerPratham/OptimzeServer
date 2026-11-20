@@ -415,7 +415,7 @@ public final class PerformanceEngine implements EngineLifecycle {
             } catch (Throwable ignored) {
             }
         }
-        return "1.6.0";
+        return "1.6.1";
     }
 
     /**

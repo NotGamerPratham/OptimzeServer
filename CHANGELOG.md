@@ -2,6 +2,11 @@
 
 All notable changes to **OptimizeServer** will be documented in this file.
 
+## [1.6.1] - 2026-11-20
+
+### Added
+- **Sponsor:** OptimizeServer is sponsored by [NGP Cloud](https://ngpcloud.in) (game server and Minecraft hosting). A plain-text sponsor line is shown once in the console at startup and in `/os version`; hide it with `general.show-sponsor: false`. The README has the sponsor banner, release notes carry a sponsor line, and `docs/publishing/sponsor-snippet.md` holds paste-ready Modrinth and SpigotMC blocks.
+
 ## [1.6.0] - 2026-11-18
 
 ### Added
