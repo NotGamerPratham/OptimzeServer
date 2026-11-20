@@ -60,6 +60,9 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
             "generate", "history"
     );
 
+    /** Plain-text sponsor line shown at startup and in /os version (disable with general.show-sponsor). */
+    public static final String SPONSOR_LINE = "Sponsored by NGP Cloud - game server & Minecraft hosting: https://ngpcloud.in";
+
     private final PerformanceEngine engine;
     private final String pluginVersion;
 
@@ -268,6 +271,10 @@ public final class OptimizeServerCommand implements CommandExecutor, TabComplete
         sender.sendMessage(ChatColor.GRAY + "Optional Integrations: " + ChatColor.WHITE
                 + "Spark=" + (engine.getSparkIntegration().isAvailable() ? "Available" : "Absent")
                 + ", Chunky=" + (engine.getChunkyIntegration().isAvailable() ? "Available" : "Absent"));
+        if (engine.getConfigManager() == null || engine.getConfigManager().getBoolean("general.show-sponsor", true)) {
+            sender.sendMessage(ChatColor.GRAY + "Sponsor: " + ChatColor.AQUA + "NGP Cloud"
+                    + ChatColor.GRAY + " - game server & Minecraft hosting - " + ChatColor.WHITE + "https://ngpcloud.in");
+        }
     }
 
     private void handleStatus(CommandSender sender) {

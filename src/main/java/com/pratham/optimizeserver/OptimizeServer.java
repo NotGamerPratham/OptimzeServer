@@ -69,6 +69,9 @@ public final class OptimizeServer extends JavaPlugin {
                     + performanceEngine.getCompatibilityManager().getPlatform().getDisplayName()
                     + " MC " + performanceEngine.getCompatibilityManager().getMinecraftVersion().toShortString()
                     + ", State=" + performanceEngine.getState().name() + ").");
+            if (configManager.getBoolean("general.show-sponsor", true)) {
+                log.info(com.pratham.optimizeserver.commands.OptimizeServerCommand.SPONSOR_LINE);
+            }
         } catch (Throwable t) {
             log.log(Level.SEVERE, "Critical error during plugin startup; entering safe shutdown.", t);
             onDisable();

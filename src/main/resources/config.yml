@@ -15,6 +15,9 @@ config-version: 3
 general:
   enabled: true
   debug-logging: false
+  # Shows "Sponsored by NGP Cloud (ngpcloud.in)" once at startup and in /os version.
+  # Set to false to hide it; no feature depends on it.
+  show-sponsor: true
   console-prefix: "[OptimizeServer]"
   # External telemetry is disabled by default and never transmits without explicit consent
   telemetry-enabled: false

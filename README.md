@@ -84,7 +84,7 @@ All three platforms ship the identical universal `OptimizeServer.jar` (Java 8+ b
 | Command | Permission | Description |
 | --- | --- | --- |
 | `/os help [page]` | `optimizeserver.status` | Paginated command reference |
-| `/os version` | `optimizeserver.status` | Platform, Minecraft version, JVM, and integration details |
+| `/os version` | `optimizeserver.status` | Platform, Minecraft version, JVM, integration details, and the sponsor line (hide it with `general.show-sponsor: false`) |
 | `/os status` | `optimizeserver.status` | Unified server performance summary |
 | `/os tps` | `optimizeserver.status` | 5s, 30s, 1m, 5m, and 15m rolling TPS |
 | `/os mspt` | `optimizeserver.status` | Average, P50, P95, P99, and StdDev MSPT |

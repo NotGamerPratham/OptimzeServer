@@ -76,6 +76,8 @@ jobs:
             echo "---"
             echo "**Downloads:** [Modrinth](https://modrinth.com/plugin/optimizeserver-notgamerpratham) · [SpigotMC](https://www.spigotmc.org/resources/optimizeserver.140480/) · [GitHub Releases](https://github.com/${{ github.repository }}/releases)"
             echo ""
+            echo "**Sponsor:** [NGP Cloud](https://ngpcloud.in) - game server & Minecraft hosting"
+            echo ""
             echo "**Compatibility:** Spigot, Paper, Purpur, Pufferfish, Folia, Leaves, Gale · Minecraft 1.8.8 – 1.21.x+ · Java 8+"
             echo ""
             echo "**SHA-256:** \`$(cut -d' ' -f1 target/OptimizeServer.jar.sha256)\`"
